@@ -9,7 +9,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 
-public static class characterFitTest
+public static class CharacterFitTest
 {
     [Serializable] class V3 { public float x, y, z; public Vector3 V { get { return new Vector3(x, y, z); } } }
     [Serializable] class Rig { public string bg, keyC, fillC, rimC, skyC, gndC; public V3 keyD, fillD, rimD; public float keyI, fillI, rimI, hemiI; }
@@ -30,11 +30,16 @@ public static class characterFitTest
         var rig = JsonUtility.FromJson<Rig>(File.ReadAllText(ParityRender.Env("SC_PARITY_RIG", ".")));
 
         EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/character/characterBase.fbx");
+        var prefab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Character/Character.fbx");
         var character = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
         character.transform.position = Vector3.zero; character.transform.rotation = Quaternion.identity;
         Transform head = null; foreach (var t in character.GetComponentsInChildren<Transform>(true)) if (t.name == "Head") head = t;
 
+        if (ParityRender.Env("SC_CHARACTER_EYES", "0") == "1")
+        {
+            var wi = Type.GetType("AetherStrand.Editor.AetherStrandWebImport, AetherStrand.Editor");
+            geo = (string)wi.GetMethod("MaybeTrimForEyes", BindingFlags.Public | BindingFlags.Static).Invoke(null, new object[] { character, geo, "Assets/Parity", tag, true });
+        }
         Type genT = Type.GetType("AetherStrand.Editor.AetherStrandMeshGenerator, AetherStrand.Editor");
         Type parT = Type.GetType("AetherStrand.Editor.HairSculptParams, AetherStrand.Editor");
         Type winT = Type.GetType("AetherStrand.Editor.AetherStrandSetupWindow, AetherStrand.Editor");
