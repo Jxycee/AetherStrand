@@ -92,9 +92,11 @@ function getInitialQueryParams(): {
   motionMode: MotionMode;
   showColliders: boolean;
   showBones: boolean;
+  recipe: any | null;
 } {
   if (typeof window === 'undefined') {
     return {
+      recipe: null,
       captureMode: false,
       preset: 'noctis',
       randomSeed: null,
@@ -123,14 +125,18 @@ function getInitialQueryParams(): {
   const motionMode = reqSim && VALID_MOTIONS.includes(reqSim) ? reqSim : 'idle';
   const showColliders = params.get('colliders') === '1';
   const showBones = params.get('bones') === '1';
-  return { captureMode, preset, randomSeed, forcedArchetype, visionMode, backdropMode, motionMode, showColliders, showBones };
+  let recipe: any = null;
+  try { const c = params.get('cfg'); if (c) recipe = JSON.parse(atob(c)); } catch {}
+  return { recipe, captureMode, preset, randomSeed, forcedArchetype, visionMode, backdropMode, motionMode, showColliders, showBones };
 }
 
 export default function App() {
   const initialQuery = useMemo(() => getInitialQueryParams(), []);
   const initialRandom = useMemo(
     () =>
-      initialQuery.randomSeed !== null || initialQuery.forcedArchetype !== null
+      initialQuery.recipe
+        ? { name: initialQuery.recipe.customName, basePreset: initialQuery.recipe.presetId, builder: initialQuery.recipe.builder, shader: initialQuery.recipe.shader, physics: initialQuery.recipe.physics } as any
+        : initialQuery.randomSeed !== null || initialQuery.forcedArchetype !== null
         ? generateRandomHairstyle(initialQuery.randomSeed ?? 777, initialQuery.forcedArchetype ?? undefined)
         : null,
     [initialQuery.randomSeed, initialQuery.forcedArchetype]

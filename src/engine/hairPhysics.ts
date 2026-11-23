@@ -5303,8 +5303,11 @@ function serializeLocksForBlender(
       seed: round5(lock.seed),
       layerAO: round5(lock.layerAO),
       isBaseShell: lock.isBaseShell,
+      scalpRoot: round5(lock.scalpRoot),
+      lockNormal: lock.lockNormal,
+      rootNormal: [round5(lock.rootNormalLocal.x), round5(-lock.rootNormalLocal.z), round5(lock.rootNormalLocal.y)],
       points: pts,
-    };
+    } as any;
   }
   return out;
 }
@@ -5319,8 +5322,14 @@ export function buildExportLocksForBlender(
 ): ExportedHairLock[] {
   const safeW = THREE.MathUtils.clamp(widthScale || 1.0, 0.65, 1.45);
   const locks = builderConfig
-    ? locksFromSpecs(buildCustomHairSpecs(builderConfig), builderConfig.seed)
+    ? locksFromSpecs(buildCustomHairSpecs(builderConfig), builderConfig.seed || 1337)
     : generateLocksForPreset(presetId);
-  bakeInterLockRestPose(locks, safeW, true);
+  if (builderConfig) {
+    // Mirror HairPhysicsSystem.loadCustomBuilder: head+bust collision-free settle, then re-bake for the live width scale.
+    bakeCollisionFreeRestPose(locks);
+    if (Math.abs(safeW - 1.0) > 0.03) bakeInterLockRestPose(locks, safeW, false);
+  } else {
+    bakeInterLockRestPose(locks, safeW, true);
+  }
   return serializeLocksForBlender(locks, safeW);
 }

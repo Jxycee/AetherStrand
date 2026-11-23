@@ -649,6 +649,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
         }
       }
 
+      if (urlParams.get('nobust') === '1') bust.rootGroup.visible = false;
       const audit = worstAudit ?? hairSystem.auditQuality(bust.headPivot, activeSimMode);
       const dataUrl = renderCaptureDataUrl(
         renderer,

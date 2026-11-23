@@ -1,0 +1,31 @@
+// Generates a recipe + PresetGeometry.json for every web archetype (deterministic seeds).
+// Run with cwd = AetherStrand clone:  npx tsx gen_recipes.ts <outDir>
+import fs from 'node:fs';
+import path from 'node:path';
+import { ALL_ARCHETYPES, generateRandomHairstyle } from '../../src/engine/hairBuilder';
+import { exportGeometry } from './web_geometry';
+
+const out = process.argv[2] ?? './batch-out';
+fs.mkdirSync(out, { recursive: true });
+const index: any[] = [];
+ALL_ARCHETYPES.forEach((arch: string, i: number) => {
+  const seed = 7001 + i;
+  const r: any = generateRandomHairstyle(seed, arch as any);
+  const recipe = {
+    schemaVersion: '2.0',
+    presetId: r.basePreset,
+    customName: r.name,
+    builder: r.builder,
+    shader: r.shader,
+    physics: { ...r.physics, solverSubsteps: 1, collisionEnabled: true },
+  };
+  const dir = path.join(out, arch);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'recipe.json'), JSON.stringify(recipe));
+  const geo = exportGeometry(recipe);
+  fs.writeFileSync(path.join(dir, 'PresetGeometry.json'), JSON.stringify(geo));
+  const locks = geo.locks;
+  index.push({ arch, name: r.name, seed, locks: locks.length });
+  console.log(arch, r.name, locks.length);
+});
+fs.writeFileSync(path.join(out, 'index.json'), JSON.stringify(index));
