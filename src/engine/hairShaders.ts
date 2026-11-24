@@ -156,6 +156,14 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uRootAO;
   uniform float uGrooveDepth;
   uniform float uStrandVariation;
+  uniform float uFadeOpacity;
+  uniform float uFadeSoftness;
+  uniform float uFadeReach;
+  uniform float uSheenBand;
+  uniform float uSheenPower;
+  uniform float uShadowLift;
+  uniform float uClumpVariation;
+  uniform float uTipLighten;
   uniform float uDebugMode;
 
   uniform vec3 uKeyDir;
@@ -195,17 +203,25 @@ const FRAGMENT_SHADER = /* glsl */ `
     return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
   }
 
+  // 0 until the fade starts, then 0..1 toward the hairline (mirrors AetherFadeU in the Unity shader)
+  float fadeU(float a, float t) {
+    float fs = abs(a - 0.25) < 0.002 ? 0.25 : clamp((a - 0.16) / 0.28, 0.0, 1.0);
+    fs = fs < 0.9 ? min(fs, uFadeReach) : fs;
+    return smoothstep(fs, 1.0, t);
+  }
+
   void main() {
     float t = clamp(vUv.y, 0.0, 1.0);
 
-    // Mode 1: isFadeCap stubble (vCardMask ~0.25): stochastic stipple dissolves toward the hairline
-    if (vCardMask > 0.15 && vCardMask < 0.45) {
-      float fadeStart0 = abs(vCardMask - 0.25) < 0.002 ? 0.25 : clamp((vCardMask - 0.16) / 0.28, 0.0, 1.0);
-      float fadeCov = pow(1.0 - smoothstep(fadeStart0, 1.0, t), 0.75);
-      vec2 fadeCell = floor(vec2(vUv.x * 42.0 + floor(vStrandSeed * 255.0) / 255.0 * 17.0, t * 28.0));
-      float fadeNoise = fract(sin(dot(fadeCell, vec2(127.1, 311.7))) * 43758.5453);
+    // Mode 1: isFadeCap dithered-opaque fade: solid before the fade starts, mostly opaque (uFadeOpacity) through it, fine dither only in the last uFadeSoftness
+    bool isFadeCap = vCardMask > 0.15 && vCardMask < 0.45;
+    float fadeU0 = isFadeCap ? fadeU(vCardMask, t) : 0.0;
+    if (isFadeCap) {
+      float fadeTail = smoothstep(1.0 - clamp(uFadeSoftness, 0.0, 1.0), 1.0, fadeU0);
+      float fadeCov = mix(1.0, uFadeOpacity * (1.0 - 0.45 * fadeU0), smoothstep(0.0, 0.2, fadeU0)) * (1.0 - fadeTail);
       float fadeIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-      if (fadeCov - mix(fadeNoise, fadeIgn, 0.86) < 0.0) discard;
+      float fadeWn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+      if (fadeCov - mix(fadeIgn, fadeWn, 0.45) < 0.0) discard;
     }
 
     // Fine realistic multi-filament UVs scaled for slender sculpted 3D locks
@@ -323,13 +339,26 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Natural multi-filament tonal variation
     float fiberTone = (flowId.r - 0.5) * 0.92 + (vStrandSeed - 0.5) * 0.32;
     vec3 albedo = clamp(gradColor * (1.0 + fiberTone * uStrandVariation), 0.0, 1.2);
+    // Fade caps: dark hair colour between root and base, easing to a lighter desaturated stubble tone (never toward the tip colour or white)
+    float fadeMask = isFadeCap ? smoothstep(0.0, 0.3, fadeU0) : 0.0;
+    if (fadeMask > 0.0) {
+      vec3 fadeDark = mix(uRootColor, uBaseColor, 0.5);
+      vec3 stubble = mix(fadeDark, vec3(dot(fadeDark, vec3(0.3333)) * 1.15), 0.35);
+      vec3 fadeAlbedo = mix(fadeDark, stubble, smoothstep(0.35, 1.0, t)) * (1.0 + fiberTone * uStrandVariation * 0.5);
+      albedo = mix(albedo, fadeAlbedo, fadeMask);
+    }
+    // Game-style look: per-clump brightness/warmth variation (one value per lock via the seed) plus lighter tips
+    float clumpTone = fract(vStrandSeed * 41.7 + 0.31) * 2.0 - 1.0;
+    albedo *= 1.0 + clumpTone * uClumpVariation * (1.0 - fadeMask);
+    albedo *= mix(vec3(1.0), vec3(1.07, 1.0, 0.93), clamp(clumpTone * 0.5 + 0.5, 0.0, 1.0) * uClumpVariation * (1.0 - fadeMask));
+    albedo *= 1.0 + uTipLighten * smoothstep(0.5, 1.0, t) * (1.0 - fadeMask);
 
     // Deep root & layered inter-clump AO for authentic velvet FFXV hair volume (no horizontal mid-tier root bars!)
     float rootOcclusion = mix(1.0 - uRootAO * 0.72 * vScalpRoot, 1.0, smoothstep(0.0, 0.22, t));
     float grooveCrevice = mix(1.0, grooveAo, uGrooveDepth * 0.68);
     float domeGrad = mix(0.84, 1.08, smoothstep(-0.55, 0.68, headN.y));
     float totalAO = rootOcclusion * grooveCrevice * mix(0.72, 1.04, vLayerAO) * domeGrad;
-    if (vCardMask > 0.15 && vCardMask < 0.45) totalAO = mix(totalAO, 0.92, t * 0.70);
+    totalAO *= mix(1.0, 0.9, t * fadeMask); // fade stays dark (no lift toward white)
 
     // Balanced 360-degree Studio Softbox Diffuse with rich shadow depth
     vec3 LKey = normalize(uKeyDir);
@@ -341,12 +370,14 @@ const FRAGMENT_SHADER = /* glsl */ `
     float ndlBack = clamp((dot(perturbedN, LRim) + 0.46) / 1.46, 0.0, 1.0);
     float skyLift = clamp(baseN.y * 0.5 + 0.5, 0.0, 1.0);
 
+    // Shadow lift: AO only partly darkens, plus a little ambient fill, so shaded hair stays coloured instead of muddy
+    float aoD = mix(totalAO, 1.0, uShadowLift * (1.0 - fadeMask));
     vec3 diffuse = albedo * (
-      uAmbientColor * (0.42 + 0.24 * skyLift) +
+      uAmbientColor * (0.42 + 0.24 * skyLift + 0.16 * uShadowLift * (1.0 - fadeMask)) +
       uKeyColor * ndlKey * 0.88 +
       uFillColor * ndlFill * 0.40 +
       uRimColor * ndlBack * 0.56
-    ) * totalAO;
+    ) * aoD;
 
     // Velvety Multi-Strand Kajiya-Kay Dual-Lobe Anisotropic Specular (silky natural sheen, zero plastic glare)
     float shiftTex = (flowId.b - 0.5) * 0.38 + (vStrandSeed - 0.5) * 0.12;
@@ -355,7 +386,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
     float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
-    float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO);
+    float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
     float keyFacing = smoothstep(-0.14, 0.48, dot(baseN, LKey));
     float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 
@@ -372,12 +403,20 @@ const FRAGMENT_SHADER = /* glsl */ `
       spec1Tint * backSpec * uRimColor * backFacing
     ) * specMask * rootOcclusion;
 
+    // Soft wide anisotropic sheen band (third Kajiya-Kay lobe, smooth mask: no per-fibre striping)
+    vec3 tS = shiftTangent(T, perturbedN, 0.02 + shiftTex * 0.5);
+    float sheenMask = smoothstep(0.08, 0.30, t) * (0.7 + 0.3 * fiberCrest) * mix(0.6, 1.0, vLayerAO) * (1.0 - fadeMask);
+    vec3 sheenTint = mix(albedo * 2.4, uPrimarySpecColor, 0.40);
+    specular += sheenTint * sheenMask * uSheenBand * (
+      strandSpecular(tS, V, LKey, uSheenPower) * uKeyColor * keyFacing +
+      strandSpecular(tS, V, LRim, uSheenPower) * uRimColor * backFacing * 0.6);
+
     // Marschner-style Rim & Feathered Tip Ash-Translucency Separation
     float fresnel = pow(1.0 - max(0.0, dot(baseN, V)), uRimPower);
     float backGate = pow(max(0.0, dot(V, -LRim)), 1.4) * 0.45 + 0.55;
     float tipWeight = mix(0.22, 1.0, smoothstep(0.28, 0.94, t));
     vec3 rimTint = mix(albedo * 1.65, uRimColor, 0.30);
-    vec3 rimScatter = rimTint * fresnel * backGate * tipWeight * uRimIntensity * 0.42 * mix(0.72, 1.0, vLayerAO);
+    vec3 rimScatter = rimTint * fresnel * backGate * tipWeight * uRimIntensity * 0.42 * mix(0.72, 1.0, vLayerAO) * mix(1.0, 0.3, fadeMask);
 
     vec3 finalColor = diffuse + specular + rimScatter;
 
@@ -425,6 +464,14 @@ export function createHairShaderMaterial(
       uRootAO: { value: config.rootAO },
       uGrooveDepth: { value: config.grooveDepth },
       uStrandVariation: { value: config.strandVariation },
+      uFadeOpacity: { value: 0.85 },
+      uFadeSoftness: { value: 0.85 },
+      uFadeReach: { value: 0.45 },
+      uSheenBand: { value: 0.30 },
+      uSheenPower: { value: 14.0 },
+      uShadowLift: { value: 0.30 },
+      uClumpVariation: { value: 0.20 },
+      uTipLighten: { value: 0.12 },
       uDebugMode: { value: VISION_DEBUG_MODE_INDEX[debugMode] },
 
       uKeyDir: { value: new THREE.Vector3(...rig.keyDir).normalize() },

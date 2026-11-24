@@ -53,6 +53,10 @@ interface VolumetricHairLock {
   isBaseShell: boolean;
   isFadeCap?: boolean;
   fadeStart?: number;
+  /** Optional mesh-only subdivision (1..4): Catmull-Rom resample of the 12 solver nodes into (N-2)*smooth+1 rings. 1/undefined = legacy mesh. */
+  smooth?: number;
+  /** Optional 0..1: blends ribbon thickness toward its width (tube-like cross-section). 0/undefined = legacy. */
+  roundness?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -220,6 +224,33 @@ for (let k = 0; k < 12; k++) {
   _NODE_THICK_POW[k] = thickPow;
   const rootThickTuck = 0.2 + 0.8 * rSin;
   _NODE_THICK_FACTOR[k] = 0.5 * 0.9 * rootThickTuck * thickPow;
+}
+
+const _smExt = new Float64Array((12 + 2) * 3);
+function catmullRom(p0: number, p1: number, p2: number, p3: number, f: number): number {
+  const f2 = f * f;
+  return 0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f2 + (3 * p1 - p0 - 3 * p2 + p3) * f2 * f);
+}
+function catmullRomD(p0: number, p1: number, p2: number, p3: number, f: number): number {
+  return 0.5 * ((p2 - p0) + 2 * (2 * p0 - 5 * p1 + 4 * p2 - p3) * f + 3 * (3 * p1 - p0 - 3 * p2 + p3) * f * f);
+}
+
+/** Per-lock mesh subdivision factor (1..4); 1 = legacy one-ring-per-node mesh. */
+function lockSmoothFactor(lock: { smooth?: number }): number {
+  const s = lock.smooth;
+  return s !== undefined && s > 1 ? Math.min(4, Math.round(s)) : 1;
+}
+
+// Analytic ribbon tables at fractional node parameter t (same formulas as the per-node tables above).
+const _smTab = { rSin: 0, tipTaper: 0, baseTipTaper: 0, thickPow: 0, tipFactor: 0 };
+function sampleRibbonTables(t: number): void {
+  _smTab.tipFactor = t;
+  _smTab.rSin = Math.sin(Math.min(1, t * 4.2) * Math.PI * 0.5);
+  const tt = t < 0.44 ? 1.0 - t * 0.14 : Math.pow((1.0 - t) / 0.56, 0.94) * 0.938;
+  _smTab.tipTaper = Math.max(0.06, tt);
+  const bt = t < 0.42 ? 1.0 - t * 0.16 : Math.pow((1.0 - t) / 0.58, 1.12) * 0.933;
+  _smTab.baseTipTaper = Math.max(0.04, bt);
+  _smTab.thickPow = Math.pow(Math.max(0.04, 1.0 - t), 0.86);
 }
 
 /**
@@ -2418,6 +2449,8 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       isBaseShell: Boolean(sp.isBaseShell),
       isFadeCap: Boolean((sp as any).isFadeCap),
       fadeStart: (sp as any).fadeStart,
+      smooth: (sp as any).smooth,
+      roundness: (sp as any).roundness,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -3094,6 +3127,9 @@ export class HairPhysicsSystem {
   private isCustomBuilder = false;
   private geometry: THREE.BufferGeometry;
   private positions!: Float32Array;
+  /** Per-lock ring count (11 legacy; (N-2)*smooth+1 when smoothed) and per-lock smooth factor, filled by buildVolumetricBuffers. */
+  private lockRingCount: Int32Array = new Int32Array(0);
+  private lockSmooth: Int32Array = new Int32Array(0);
   private normals!: Float32Array;
   private headNormals!: Float32Array;
   private tangents!: Float32Array;
@@ -3322,7 +3358,11 @@ export class HairPhysicsSystem {
     const particleCount = strandCount * NODES_PER_LOCK;
     const quadsPerLock = (NODES_PER_LOCK - 2) * (RING_VERTS - 1);
     const tipTrisPerLock = RING_VERTS - 1;
-    const triangleCount = strandCount * (quadsPerLock * 2 + tipTrisPerLock);
+    let triangleCount = strandCount * (quadsPerLock * 2 + tipTrisPerLock);
+    for (let i = 0; i < this.locks.length; i++) {
+      const sm = lockSmoothFactor(this.locks[i]);
+      if (sm > 1) triangleCount += (NODES_PER_LOCK - 2) * (sm - 1) * (RING_VERTS - 1) * 2;
+    }
     return {
       strandCount,
       particleCount,
@@ -3359,13 +3399,21 @@ export class HairPhysicsSystem {
 
   private buildVolumetricBuffers(): void {
     const lockCount = this.locks.length;
-    const ringsPerLock = NODES_PER_LOCK - 1;
-    const vertsPerLock = ringsPerLock * RING_VERTS + 1;
-    const totalVerts = lockCount * vertsPerLock;
-
+    this.lockRingCount = new Int32Array(lockCount);
+    this.lockSmooth = new Int32Array(lockCount);
+    const vertBase = new Int32Array(lockCount + 1);
     const sides = RING_VERTS - 1;
-    const trisPerLock = (ringsPerLock - 1) * sides * 2 + sides;
-    const totalIndices = lockCount * trisPerLock * 3;
+    let totalTris = 0;
+    for (let s = 0; s < lockCount; s++) {
+      const sm = lockSmoothFactor(this.locks[s]);
+      const rings = (NODES_PER_LOCK - 2) * sm + 1; // 11 for sm = 1 (legacy)
+      this.lockSmooth[s] = sm;
+      this.lockRingCount[s] = rings;
+      vertBase[s + 1] = vertBase[s] + rings * RING_VERTS + 1;
+      totalTris += (rings - 1) * sides * 2 + sides;
+    }
+    const totalVerts = vertBase[lockCount];
+    const totalIndices = totalTris * 3;
 
     this.positions = new Float32Array(totalVerts * 3);
     this.normals = new Float32Array(totalVerts * 3);
@@ -3387,11 +3435,13 @@ export class HairPhysicsSystem {
 
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      const baseVertex = s * vertsPerLock;
+      const baseVertex = vertBase[s];
+      const ringsPerLock = this.lockRingCount[s];
+      const lockSm = this.lockSmooth[s];
       const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : 1.0;
 
       for (let k = 0; k < ringsPerLock; k++) {
-        const vCoord = k / (NODES_PER_LOCK - 1);
+        const vCoord = (k / lockSm) / (NODES_PER_LOCK - 1);
         for (let r = 0; r < RING_VERTS; r++) {
           uvs[vOffset * 2] = PROFILE_U[r];
           uvs[vOffset * 2 + 1] = vCoord;
@@ -5025,7 +5075,6 @@ export class HairPhysicsSystem {
     updateBones: boolean,
     widthScale = 1.0
   ): void {
-    const ringsPerLock = NODES_PER_LOCK - 1;
     let vIdx = 0;
     let bIdx = 0;
 
@@ -5056,6 +5105,20 @@ export class HairPhysicsSystem {
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
       const particles = lock.particles;
+      const ringsPerLock = this.lockRingCount[s];
+      const sm = this.lockSmooth[s];
+      const roundness = lock.roundness !== undefined && lock.roundness > 0 ? Math.min(1, lock.roundness) : 0;
+      if (sm > 1) {
+        // Extended control polygon (reflected end points) for the Catmull-Rom resample of the solver nodes
+        for (let i = 0; i < NODES_PER_LOCK; i++) {
+          const q = particles[i].pos;
+          _smExt[(i + 1) * 3] = q.x; _smExt[(i + 1) * 3 + 1] = q.y; _smExt[(i + 1) * 3 + 2] = q.z;
+        }
+        for (let a = 0; a < 3; a++) {
+          _smExt[a] = 2 * _smExt[3 + a] - _smExt[6 + a];
+          _smExt[(NODES_PER_LOCK + 1) * 3 + a] = 2 * _smExt[NODES_PER_LOCK * 3 + a] - _smExt[(NODES_PER_LOCK - 1) * 3 + a];
+        }
+      }
       const isBase = lock.isBaseShell;
       const lockNormal = lock.lockNormal;
       const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
@@ -5073,15 +5136,33 @@ export class HairPhysicsSystem {
 
       let ox = 0, oy = 1, oz = 0;
 
-      for (let k = 0; k < ringsPerLock; k++) {
+      for (let m = 0; m < ringsPerLock; m++) {
+        const k = sm === 1 ? m : Math.floor(m / sm);
         const pt = particles[k];
-        const p = pt.pos;
-        const px0 = p.x, py0 = p.y, pz0 = p.z;
-        const pClear = pt.clearance;
-        const pInst = pt.instability;
-
-        let tx: number, ty: number, tz: number;
-        if (k === 0) {
+        let px0: number, py0: number, pz0: number, pClear: number, pInst: number;
+        let tx = 0, ty = 0, tz = 0;
+        if (sm > 1) {
+          const fu = (m - k * sm) / sm;
+          const e = k * 3;
+          px0 = catmullRom(_smExt[e], _smExt[e + 3], _smExt[e + 6], _smExt[e + 9], fu);
+          py0 = catmullRom(_smExt[e + 1], _smExt[e + 4], _smExt[e + 7], _smExt[e + 10], fu);
+          pz0 = catmullRom(_smExt[e + 2], _smExt[e + 5], _smExt[e + 8], _smExt[e + 11], fu);
+          tx = catmullRomD(_smExt[e], _smExt[e + 3], _smExt[e + 6], _smExt[e + 9], fu);
+          ty = catmullRomD(_smExt[e + 1], _smExt[e + 4], _smExt[e + 7], _smExt[e + 10], fu);
+          tz = catmullRomD(_smExt[e + 2], _smExt[e + 5], _smExt[e + 8], _smExt[e + 11], fu);
+          const ptN = particles[Math.min(NODES_PER_LOCK - 1, k + 1)];
+          pClear = pt.clearance + (ptN.clearance - pt.clearance) * fu;
+          pInst = pt.instability + (ptN.instability - pt.instability) * fu;
+          sampleRibbonTables((m / sm) / (NODES_PER_LOCK - 1));
+        } else {
+          const p = pt.pos;
+          px0 = p.x; py0 = p.y; pz0 = p.z;
+          pClear = pt.clearance;
+          pInst = pt.instability;
+        }
+        if (sm > 1) {
+          // tangent already set from the spline derivative
+        } else if (k === 0) {
           const p1 = particles[1].pos;
           tx = p1.x - px0; ty = p1.y - py0; tz = p1.z - pz0;
         } else {
@@ -5134,15 +5215,16 @@ export class HairPhysicsSystem {
         oy = sz * tx - sx * tz;
         oz = sx * ty - sy * tx;
 
-        const rSin = _NODE_ROOT_SIN[k];
+        const rSin = sm > 1 ? _smTab.rSin : _NODE_ROOT_SIN[k];
         const rootTuck = isBase ? 0.88 + 0.12 * rSin : rootMinW + (1.0 - rootMinW) * rSin;
         const rootThickTuck = isBase ? 1.0 : 0.2 + 0.8 * rSin;
         const isFade = lock.isFadeCap === true;
-        const tipTaper = isFade ? 1.0 : (isBase ? _NODE_BASE_TIP_TAPER[k] : _NODE_TIP_TAPER[k]);
+        const tipTaper = isFade ? 1.0 : (isBase ? (sm > 1 ? _smTab.baseTipTaper : _NODE_BASE_TIP_TAPER[k]) : (sm > 1 ? _smTab.tipTaper : _NODE_TIP_TAPER[k]));
         const halfW = baseHalfW * rootTuck * tipTaper;
-        const halfT = isFade
-          ? baseHalfT * rootThickTuck * 0.55 * (1.0 - _NODE_TIP_FACTOR[k] * 0.65)
-          : baseHalfT * rootThickTuck * _NODE_THICK_POW[k];
+        let halfT = isFade
+          ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? _smTab.tipFactor : _NODE_TIP_FACTOR[k]) * 0.65)
+          : baseHalfT * rootThickTuck * (sm > 1 ? _smTab.thickPow : _NODE_THICK_POW[k]);
+        if (roundness > 0 && !isFade && !isBase) halfT += (halfW * 0.9 * rootThickTuck - halfT) * roundness;
 
         // 7-vertex crescent ring: zero per-vertex sqrt because (side, out) are orthonormal and (PROFILE_NX, PROFILE_NY) are unit!
         for (let r = 0; r < RING_VERTS; r++) {
@@ -5173,7 +5255,7 @@ export class HairPhysicsSystem {
           vIdx++;
         }
 
-        if (updateBones) {
+        if (updateBones && (sm === 1 || m === k * sm)) {
           const pNext = particles[k + 1].pos;
           boneLines[bIdx++] = px0;
           boneLines[bIdx++] = py0;
