@@ -543,11 +543,19 @@ export function BottomControlDock({
                 />
                 <SliderRow
                   label="Fade Height"
-                  value={activeBuilder.fadeHeight ?? 0.5}
+                  value={activeBuilder.fadeHeight ?? 0.4}
                   min={0.0}
                   max={1.0}
                   step={0.05}
                   onChange={(fadeHeight) => onChangeBuilder({ fadeHeight })}
+                />
+                <SliderRow
+                  label="Fade Blend"
+                  value={activeBuilder.fadeBlend ?? 0.75}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeBlend) => onChangeBuilder({ fadeBlend })}
                 />
                 <div className="flex flex-col gap-1">
                   <ColorSwatchInput

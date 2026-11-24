@@ -70,6 +70,14 @@ interface VolumetricHairLock {
   ripple?: number;
   /** Bumps along the lock length for ripple (default 9; needs smooth 3-4 to resolve). */
   rippleFreq?: number;
+  /** Optional [from, to]: the part of the root->base->tip colour gradient this lock shows (aGradT). Default [0, 1]. */
+  colorRange?: [number, number];
+  /**
+   * Optional: close-cut hair that keeps its built shape exactly and follows the head rigidly. Skips the rest-pose bake
+   * (head margin, smoothing, inter-lock push) and the live solver. Use for short, densely layered hair (crops, fades)
+   * where the bake would crumple overlapping locks into knots and flakes.
+   */
+  rigid?: boolean;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -2508,6 +2516,8 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       tipWidth: (sp as any).tipWidth,
       ripple: (sp as any).ripple,
       rippleFreq: (sp as any).rippleFreq,
+      colorRange: (sp as any).colorRange,
+      rigid: (sp as any).rigid === true || undefined,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -2536,6 +2546,7 @@ function bakeCollisionFreeRestPose(locks: VolumetricHairLock[]): void {
     for (let k = 0; k < ps.length; k++) {
       ps[k].pos.copy(ps[k].restLocal).add(_neutralHeadPos);
     }
+    if (lock.rigid) continue; // close-cut: keeps its built shape
 
     // Prevent roots from being buried inside skull OR floating detached off the scalp canopy
     if (!lock.isBaseShell) {
@@ -2693,6 +2704,7 @@ function bakeInterLockRestPose(
 
     for (let s = 0; s < locks.length; s++) {
       const lock = locks[s];
+      if (lock.rigid) continue; // close-cut locks neither push nor get pushed
       const ps = lock.particles;
       const base = s * NODES_PER_LOCK;
       const isBase = lock.isBaseShell;
@@ -2968,7 +2980,7 @@ function bakeInterLockRestPose(
     // Re-clamp radial silhouette envelope (scales naturally with widthScale!), smooth curvature, lengths & head/bust colliders
     for (let s = 0; s < locks.length; s++) {
       const lock = locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const base = s * NODES_PER_LOCK;
       const maxLift = (lock.lockNormal ? 0.056 : 0.082) + swellExtra;
@@ -3067,7 +3079,7 @@ function bakeInterLockRestPose(
     const lock = locks[s];
     const ps = lock.particles;
     const base = s * NODES_PER_LOCK;
-    if (!lock.isBaseShell) {
+    if (!lock.isBaseShell && !lock.rigid) {
       const isCrownRoot = !lock.lockNormal && workY[base] - _neutralHeadPos.y > 0.65;
       const yCap1 = workY[base] + 0.004;
       for (let kp = 0; kp < 4; kp++) {
@@ -3307,7 +3319,7 @@ export class HairPhysicsSystem {
 
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       for (let k = 2; k < ps.length; k++) {
         if (entryCount >= MAX_HASH_ENTRIES) break;
@@ -3489,6 +3501,8 @@ export class HairPhysicsSystem {
     const layerAOs = new Float32Array(totalVerts);
     const cardMasks = new Float32Array(totalVerts);
     const scalpRoots = new Float32Array(totalVerts);
+    // colour gradient coordinate: uv.y unless the lock shows only part of the gradient (colorRange)
+    const gradTs = new Float32Array(totalVerts);
     const indices = new Uint32Array(totalIndices);
 
     let vOffset = 0;
@@ -3500,6 +3514,7 @@ export class HairPhysicsSystem {
       const ringsPerLock = this.lockRingCount[s];
       const lockSm = this.lockSmooth[s];
       const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : 1.0;
+      const cr0 = lock.colorRange ? lock.colorRange[0] : 0, cr1 = lock.colorRange ? lock.colorRange[1] : 1;
 
       for (let k = 0; k < ringsPerLock; k++) {
         const vCoord = (k / lockSm) / (NODES_PER_LOCK - 1);
@@ -3511,6 +3526,7 @@ export class HairPhysicsSystem {
           layerAOs[vOffset] = lock.layerAO * undersideShade;
           cardMasks[vOffset] = maskVal;
           scalpRoots[vOffset] = lock.scalpRoot;
+          gradTs[vOffset] = cr0 + (cr1 - cr0) * vCoord;
           vOffset++;
         }
 
@@ -3541,6 +3557,7 @@ export class HairPhysicsSystem {
       layerAOs[vOffset] = lock.layerAO;
       cardMasks[vOffset] = maskVal;
       scalpRoots[vOffset] = lock.scalpRoot;
+      gradTs[vOffset] = cr1;
       vOffset++;
 
       const lastRow = baseVertex + (ringsPerLock - 1) * RING_VERTS;
@@ -3563,6 +3580,7 @@ export class HairPhysicsSystem {
     this.geometry.setAttribute('aCardMask', new THREE.BufferAttribute(cardMasks, 1));
     this.geometry.setAttribute('aClearance', new THREE.BufferAttribute(this.clearances, 1));
     this.geometry.setAttribute('aScalpRoot', new THREE.BufferAttribute(scalpRoots, 1));
+    this.geometry.setAttribute('aGradT', new THREE.BufferAttribute(gradTs, 1));
     this.geometry.setAttribute('aInstability', new THREE.BufferAttribute(this.instabilities, 1));
     this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     this.hairMesh.geometry = this.geometry;
@@ -3796,7 +3814,7 @@ export class HairPhysicsSystem {
     let entryCount = 0;
     for (let s = 0; s < this.locks.length; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
       for (let k = 2; k < ps.length; k++) {
@@ -4022,7 +4040,7 @@ export class HairPhysicsSystem {
     // Snapshot per-node frame velocities
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const baseIdx = s * NODES_PER_LOCK;
       for (let k = 2; k < ps.length; k++) {
@@ -4037,7 +4055,7 @@ export class HairPhysicsSystem {
     // Apply weighted neighbor momentum sharing (purely dissipative, zero energy gain, zero bounce!)
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const baseIdx = s * NODES_PER_LOCK;
       for (let k = 2; k < ps.length; k++) {
@@ -4114,7 +4132,7 @@ export class HairPhysicsSystem {
 
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
       const invMass = 1.0 / (lock.mass * massScale);
@@ -4809,6 +4827,18 @@ export class HairPhysicsSystem {
         const p0z = m20 * r0.x + m21 * r0.y + m22 * r0.z + hpz;
         particles[0].pos.set(p0x, p0y, p0z);
         particles[0].prevPos.set(p0x, p0y, p0z);
+        if (lock.rigid) {
+          // close-cut: every node follows the head rigidly at its built rest position
+          for (let k = 1; k < pLen; k++) {
+            const rl = particles[k].restLocal;
+            const x = m00 * rl.x + m01 * rl.y + m02 * rl.z + hpx;
+            const y = m10 * rl.x + m11 * rl.y + m12 * rl.z + hpy;
+            const z = m20 * rl.x + m21 * rl.y + m22 * rl.z + hpz;
+            particles[k].pos.set(x, y, z);
+            particles[k].prevPos.set(x, y, z);
+          }
+          continue;
+        }
 
         for (let k = 1; k < pLen; k++) {
           const p = particles[k];

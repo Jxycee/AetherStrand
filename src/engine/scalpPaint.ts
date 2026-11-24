@@ -129,13 +129,23 @@ export function scalpPaintAlpha(dens: number, grain: number, n01: number): numbe
 
 /**
  * Paint colour: the override if set, else the hair's own colour, the average tone a lock shows along its length
- * (20% root, 50% base, 30% tip; sRGB hex in, sRGB colour out). Mirrored in the Unity importer (AetherStrandScalpPaint).
+ * (PAINT_MIX and PAINT_SHEEN below; sRGB hex in, colour out). Mirrored in the Unity importer (AetherStrandScalpPaint).
  */
 export function scalpPaintColor(p: Pick<ScalpPaint, 'color'> | null | undefined, rootHex: string, baseHex?: string, tipHex?: string): THREE.Color {
   if (p?.color && /^#[0-9a-fA-F]{6}$/.test(p.color)) return new THREE.Color(p.color);
   const r = new THREE.Color(rootHex), b = new THREE.Color(baseHex ?? rootHex), t = new THREE.Color(tipHex ?? baseHex ?? rootHex);
-  return new THREE.Color(r.r * 0.2 + b.r * 0.5 + t.r * 0.3, r.g * 0.2 + b.g * 0.5 + t.g * 0.3, r.b * 0.2 + b.b * 0.5 + t.b * 0.3);
+  const [wr, wb, wt] = PAINT_MIX, g = PAINT_SHEEN;
+  return new THREE.Color((r.r * wr + b.r * wb + t.r * wt) * g, (r.g * wr + b.g * wb + t.g * wt) * g, (r.b * wr + b.b * wb + t.b * wt) * g);
 }
+
+/**
+ * Default paint colour = (root, base, tip) mixed by PAINT_MIX in linear space, times PAINT_SHEEN. The paint is lit flat
+ * while locks get sheen and tip colour from the hair shader, so a plain average reads darker than the locks and painted
+ * sides look like bare scalp; the mix leans to base and tip and the gain stands in for the sheen. Mirrored in Unity
+ * (AetherStrandScalpPaint.PaintColor).
+ */
+export const PAINT_MIX: [number, number, number] = [0.1, 0.45, 0.45];
+export const PAINT_SHEEN = 1.25;
 
 /**
  * Applies the shared hairline look to a paint: softness widens the final falloff (centred on the cut line, so the hairline

@@ -231,6 +231,7 @@ namespace AetherStrand
                 ld.scalpRoot = AetherStrandJson.D(d, "scalpRoot", 0.65);
                 ld.isBaseShell = AetherStrandJson.B(d, "isBaseShell", false);
                 ld.lockNormal = AetherStrandJson.B(d, "lockNormal", false);
+                ld.rigid = AetherStrandJson.B(d, "rigid", false);
                 ld.isFadeCap = AetherStrandJson.B(d, "isFadeCap", false);
                 ld.fadeStart = AetherStrandJson.D(d, "fadeStart", double.NaN);
                 ld.smooth = System.Math.Max(1, System.Math.Min(4, (int)System.Math.Round(AetherStrandJson.D(d, "smooth", 1.0))));
@@ -239,6 +240,8 @@ namespace AetherStrand
                 ld.tipWidth = System.Math.Max(0.0, System.Math.Min(0.9, AetherStrandJson.D(d, "tipWidth", 0.0)));
                 ld.ripple = System.Math.Max(0.0, System.Math.Min(0.45, AetherStrandJson.D(d, "ripple", 0.0)));
                 ld.rippleFreq = System.Math.Max(1.0, AetherStrandJson.D(d, "rippleFreq", 9.0));
+                ld.colorFrom = AetherStrandJson.D(d, "colorFrom", double.NaN);
+                ld.colorTo = AetherStrandJson.D(d, "colorTo", double.NaN);
                 if (AetherStrandJson.Has(d, "rootNormal"))
                 {
                     double[] rn = AetherStrandJson.Arr(d["rootNormal"]);

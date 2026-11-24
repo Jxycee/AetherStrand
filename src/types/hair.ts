@@ -68,6 +68,8 @@ export interface HairBuilderConfig {
    * top hair starts). Used by styles with a painted fade (see fadeScalpPaint in hairBuilder.ts). Default 0.4.
    */
   fadeHeight?: number;
+  /** 0..1: fade blend width (fadeScalpPaint `blend`): longer, smoother gradient into the short sides. Default per style. */
+  fadeBlend?: number;
   /**
    * Optional, 0 to 1: how softly the painted hairline (and any fade edge) blends into the skin, every style.
    * 0 = crisp barbered edge, 1 = very soft and wispy. Default 0.5. See applyHairlineLook in scalpPaint.ts.

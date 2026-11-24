@@ -79,6 +79,9 @@ namespace AetherStrand
                 int bv = vertBase[s];
                 int rings = ringCount[s], sm1 = lockSm[s];
                 float mask = d.isBaseShell ? 0f : d.isFadeCap ? (double.IsNaN(d.fadeStart) ? 0.25f : 0.16f + 0.28f * Mathf.Clamp01((float)d.fadeStart)) : 1f;
+                // uv2.y: colour gradient coordinate + 1 when the lock shows only part of the gradient (web colorRange / aGradT), else 0
+                bool hasCr = !double.IsNaN(d.colorFrom) && !double.IsNaN(d.colorTo);
+                float cr0 = hasCr ? (float)d.colorFrom : 0f, cr1 = hasCr ? (float)d.colorTo : 1f;
                 int vi = bv;
                 for (int k = 0; k < rings; k++)
                 {
@@ -86,14 +89,14 @@ namespace AetherStrand
                     for (int r = 0; r < RingVerts; r++)
                     {
                         uv[vi] = new Vector2(PU[r], t);
-                        uv2[vi] = new Vector2((float)d.scalpRoot, 0f);
+                        uv2[vi] = new Vector2((float)d.scalpRoot, hasCr ? 1f + cr0 + (cr1 - cr0) * t : 0f);
                         float under = PY[r] < -0.1 ? 0.85f : 1.0f;
                         { float sd = Mathf.Clamp01((float)d.seed) * 255f, sh = Mathf.Floor(sd); col[vi] = new Color(sd - sh, (float)d.layerAO * under, sh / 255f, mask); }
                         vi++;
                     }
                 }
                 int tip = vi;
-                uv[tip] = new Vector2(0.5f, 1f); uv2[tip] = new Vector2((float)d.scalpRoot, 0f);
+                uv[tip] = new Vector2(0.5f, 1f); uv2[tip] = new Vector2((float)d.scalpRoot, hasCr ? 1f + cr1 : 0f);
                 { float sd = Mathf.Clamp01((float)d.seed) * 255f, sh = Mathf.Floor(sd); col[tip] = new Color(sd - sh, (float)d.layerAO, sh / 255f, mask); }
                 for (int k = 0; k < rings - 1; k++)
                 {

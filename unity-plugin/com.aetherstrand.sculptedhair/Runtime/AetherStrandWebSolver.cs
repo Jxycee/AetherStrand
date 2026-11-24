@@ -43,12 +43,14 @@ namespace AetherStrand
             public double restMidR = double.NaN;      // NaN: derive from rest[4]
             public double rootRawY = double.NaN;      // NaN: rest[0].y
             public bool isBaseShell, lockNormal, isFadeCap;
+            public bool rigid;                        // close-cut: keeps its rest shape, follows the head rigidly (no sim, no collision)
             public double fadeStart = double.NaN;     // NaN: default fade curve (alpha 0.25)
             public int smooth = 1;                    // mesh-only Catmull-Rom subdivision 1..4 (solver stays at N nodes)
             public double roundness = 0;              // 0..1 tube-like cross-section blend
             public double tipStart = double.NaN;      // NaN: legacy end taper (starts at 0.44)
             public double tipWidth = 0;               // 0..0.9 width/thickness held to the end, rounded cap (locs, blunt cuts)
             public double ripple = 0, rippleFreq = 9; // 0..0.45 periodic width bumps along the lock (locs, rope twists)
+            public double colorFrom = double.NaN, colorTo = double.NaN; // part of the root->tip colour gradient shown (NaN: 0..1)
             public double[] rootNormal = { 0, 1, 0 }; // web head-local
         }
 
@@ -102,7 +104,7 @@ namespace AetherStrand
         double[] fpx, fpy, fpz, fvx, fvy, fvz; // framePrevPos / framePrevVel (head-local)
         double[] lockSeed, lockBaseW, lockBaseT, lockMass, lockRestMidR, lockRootRawY, lockScalpRoot, lockLayerAO;
         int[] lockLayer;
-        bool[] lockBase, lockNormal;
+        bool[] lockBase, lockNormal, lockRigid;
         double[] rootNX, rootNY, rootNZ;
         double maxBaseW;
 
@@ -147,7 +149,7 @@ namespace AetherStrand
             fpx = new double[P]; fpy = new double[P]; fpz = new double[P]; fvx = new double[P]; fvy = new double[P]; fvz = new double[P];
             lockSeed = new double[L]; lockBaseW = new double[L]; lockBaseT = new double[L]; lockMass = new double[L];
             lockRestMidR = new double[L]; lockRootRawY = new double[L]; lockScalpRoot = new double[L]; lockLayerAO = new double[L];
-            lockLayer = new int[L]; lockBase = new bool[L]; lockNormal = new bool[L];
+            lockLayer = new int[L]; lockBase = new bool[L]; lockNormal = new bool[L]; lockRigid = new bool[L];
             rootNX = new double[L]; rootNY = new double[L]; rootNZ = new double[L];
             maxBaseW = 0.052;
             for (int s = 0; s < L; s++)
@@ -165,7 +167,7 @@ namespace AetherStrand
                 lockSeed[s] = d.seed; lockBaseW[s] = d.baseWidth; lockBaseT[s] = d.baseThickness;
                 lockMass[s] = d.mass > 0 ? d.mass : Math.Max(0.00018, d.baseWidth * d.baseThickness);
                 lockLayer[s] = d.layerOrder >= 0 ? d.layerOrder : (d.isBaseShell ? 0 : 2);
-                lockBase[s] = d.isBaseShell; lockNormal[s] = d.lockNormal;
+                lockBase[s] = d.isBaseShell; lockNormal[s] = d.lockNormal; lockRigid[s] = d.rigid;
                 lockScalpRoot[s] = d.scalpRoot; lockLayerAO[s] = d.layerAO;
                 lockRootRawY[s] = double.IsNaN(d.rootRawY) ? ry[b] : d.rootRawY;
                 if (double.IsNaN(d.restMidR))
@@ -234,7 +236,7 @@ namespace AetherStrand
             int entryCountL = 0;
             for (int s = 0; s < L; s++)
             {
-                if (lockBase[s]) continue;
+                if (lockBase[s] || lockRigid[s]) continue;
                 for (int k = 2; k < N; k++)
                 {
                     if (entryCountL >= MaxHashEntries) break;
@@ -643,6 +645,19 @@ namespace AetherStrand
                         double p0z = M.m20 * r0x + M.m21 * r0y + M.m22 * r0z + hpz_;
                         px[b] = p0x; py[b] = p0y; pz[b] = p0z; qx[b] = p0x; qy[b] = p0y; qz[b] = p0z;
                     }
+                    if (lockRigid[s])
+                    {
+                        // close-cut: every node follows the head rigidly at its rest position
+                        for (int k = 1; k < N; k++)
+                        {
+                            int i = b + k;
+                            double x = M.m00 * rx[i] + M.m01 * ry[i] + M.m02 * rz[i] + hpx_;
+                            double y = M.m10 * rx[i] + M.m11 * ry[i] + M.m12 * rz[i] + hpy_;
+                            double z = M.m20 * rx[i] + M.m21 * ry[i] + M.m22 * rz[i] + hpz_;
+                            px[i] = x; py[i] = y; pz[i] = z; qx[i] = x; qy[i] = y; qz[i] = z;
+                        }
+                        continue;
+                    }
 
                     for (int k = 1; k < N; k++)
                     {
@@ -885,7 +900,7 @@ namespace AetherStrand
         {
             for (int s = 0; s < L; s++)
             {
-                if (lockBase[s]) continue;
+                if (lockBase[s] || lockRigid[s]) continue;
                 int b = s * N;
                 for (int k = 2; k < N; k++)
                 {
@@ -895,7 +910,7 @@ namespace AetherStrand
             }
             for (int s = 0; s < L; s++)
             {
-                if (lockBase[s]) continue;
+                if (lockBase[s] || lockRigid[s]) continue;
                 int b = s * N;
                 for (int k = 2; k < N; k++)
                 {
@@ -947,7 +962,7 @@ namespace AetherStrand
             int cellCountN = 0, entryCount = 0;
             for (int s = 0; s < L; s++)
             {
-                if (lockBase[s]) continue;
+                if (lockBase[s] || lockRigid[s]) continue;
                 int b = s * N;
                 double rootMinW = lockScalpRoot[s] >= 0.5 ? 0.36 : 0.08;
                 double invMass = 1.0 / (lockMass[s] * massScale);

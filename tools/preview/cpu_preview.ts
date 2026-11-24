@@ -272,6 +272,14 @@ function renderView(vi: number) {
   const ao = geo.attributes.aLayerAO.array as Float32Array;
   const card = geo.attributes.aCardMask.array as Float32Array;
   const seeds = geo.attributes.aStrandSeed.array as Float32Array;
+  const scalpRootA = geo.attributes.aScalpRoot.array as Float32Array;
+  const gradTA = geo.attributes.aGradT.array as Float32Array;
+  const headNA = geo.attributes.aHeadNormal.array as Float32Array;
+  const HN = new THREE.Vector3(), BN = new THREE.Vector3();
+  // highlights as the viewport shader draws them (hairShaders.ts): primary lobe at the recipe's power and intensity, gated by
+  // a normal blended 42% toward the head normal (not the raw card normal, which dots every lock), plus the wide sheen band
+  const pPow = sh.primaryPower ?? 76, pInt = sh.primaryIntensity ?? 0.32, sPow = sh.secondaryPower ?? 24, sInt = sh.secondaryIntensity ?? 0.2;
+  const sstepK = (e0: number, e1: number, x: number) => { const c = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return c * c * (3 - 2 * c); };
   const index = geo.index!.array as Uint32Array;
   const nV = pos.length / 3;
   const vp: number[][] = new Array(nV);
@@ -284,17 +292,22 @@ function renderView(vi: number) {
     if (facing < 0) N.negate();
     T.set(tan[i * 3], tan[i * 3 + 1], tan[i * 3 + 2]).normalize();
     const t = uv[i * 2 + 1];
-    const a = t < 0.3 ? t / 0.3 : 1;
-    const b = t > 0.55 ? (t - 0.55) / 0.45 : 0;
-    const base = cRoot.clone().lerp(cBase, a).lerp(cTip, b * 0.8);
+    // as hairShaders.ts: the dark root only on true scalp roots (scalpRoot 1); shingled tiers blend toward the base colour
+    const sstep = (e0: number, e1: number, x: number) => { const c = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return c * c * (3 - 2 * c); };
+    const gt = Math.max(0, Math.min(1, gradTA[i])); // colour gradient coordinate (colorRange)
+    const a = sstep(0, 0.28, t);
+    const effRoot = cBase.clone().lerp(cRoot, scalpRootA[i]);
+    const base = gt < 0.28 ? effRoot.lerp(cBase, sstep(0, 0.28, gt)) : cBase.clone().lerp(cTip, sstep(0.28, 1, gt));
     const isShell = card[i] === 0;
     const aoK = (isShell ? 0.55 : 0.62 + 0.38 * ao[i]) * (0.72 + 0.28 * a);
     const diff = 0.34 + 0.58 * Math.max(0, (N.dot(key) + 0.25) / 1.25) + 0.16 * Math.max(0, N.dot(fill));
-    const th = T.dot(Hh);
-    const sinTH = Math.sqrt(Math.max(0, 1 - th * th));
-    const spec1 = Math.pow(sinTH, 90) * 0.55 * Math.max(0, N.dot(key) + 0.2);
-    const th2 = T.dot(Hh) + 0.25;
-    const spec2 = Math.pow(Math.sqrt(Math.max(0, 1 - th2 * th2)), 30) * 0.18;
+    HN.set(headNA[i * 3], headNA[i * 3 + 1], headNA[i * 3 + 2]).normalize();
+    BN.copy(N).lerp(HN, 0.42).normalize();
+    const keyFacing = sstepK(-0.14, 0.48, BN.dot(key));
+    const specMask = sstepK(0.08, 0.24, t) * (0.62 + 0.38 * ao[i]);
+    const lobe = (shift: number, pw: number) => { const th = T.clone().addScaledVector(BN, shift).normalize().dot(Hh); return Math.pow(Math.sqrt(Math.max(0, 1 - th * th)), pw); };
+    const spec1 = (lobe(0.05, pPow) * pInt * 0.56 * 1.6 + lobe(0.02, 14) * 0.3 * 0.35) * keyFacing * specMask;
+    const spec2 = lobe(0.25, sPow) * sInt * 0.44 * keyFacing * specMask;
     const rim = Math.pow(1 - Math.abs(facing), 3) * 0.12;
     vc[i] = [0, 1, 2].map((k) => {
       const bc = [base.r, base.g, base.b][k];
