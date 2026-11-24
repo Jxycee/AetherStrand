@@ -1,0 +1,52 @@
+{
+ "schemaVersion": "2.0",
+ "presetId": "leon",
+ "customName": "Pixie Cut",
+ "builder": {
+  "archetype": "pixie-cut",
+  "partPosition": -0.4,
+  "bangsLength": 0.34,
+  "bangsSweep": 0.65,
+  "crownVolume": 0.36,
+  "spikeLift": 0.06,
+  "sideLength": 0.27,
+  "backLength": 0.32,
+  "layerShag": 0.48,
+  "density": 1.12,
+  "strandWidth": 0.92,
+  "seed": 4101
+ },
+ "shader": {
+  "rootColor": "#2f211a",
+  "baseColor": "#4a3428",
+  "tipColor": "#6a4a38",
+  "primarySpecColor": "#f2e6cf",
+  "secondarySpecColor": "#b08c54",
+  "primaryShift": 0.08,
+  "primaryPower": 84,
+  "primaryIntensity": 0.38,
+  "secondaryShift": -0.15,
+  "secondaryPower": 28,
+  "secondaryIntensity": 0.22,
+  "rimIntensity": 0.4,
+  "rimPower": 2.9,
+  "rootAO": 0.54,
+  "grooveDepth": 0.68,
+  "strandVariation": 0.24
+ },
+ "physics": {
+  "stiffness": 0.6,
+  "gravity": 4.6,
+  "windStrength": 0.48,
+  "windTurbulence": 0.16,
+  "windAzimuth": 300,
+  "damping": 0.12,
+  "inertia": 0.85,
+  "bendingSmoothness": 0.52,
+  "collisionMarginMm": 9,
+  "rootAnchor": 0.64,
+  "solverSubsteps": 1,
+  "strandWidthScale": 1,
+  "collisionEnabled": true
+ }
+}
