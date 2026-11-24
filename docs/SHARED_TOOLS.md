@@ -49,7 +49,8 @@ instead of modelling fade-cap locks.
 ## Textured top and side layer
 
 - `texturedTopLocks(specs, options)`: short, pointed clumps growing from a crown whorl and flowing forward, with lift and
-  spikes (crop, undercut and fade tops).
+  spikes (crop, undercut and fade tops). Option `quiff` (0..1): front clumps keep their height where the forehead drops
+  away, so the front stands up rather than out. Clumps flowing back or sideways settle onto the skull toward their tips.
 - `sideLayerLocks(specs, options)`: two rows of short locks lying on the sides down to a per-azimuth end. Use it only
   when the sides are long enough to need modelled hair; short sides are better painted.
 
@@ -74,3 +75,7 @@ rest positions out by that much (outward only). Not yet ported to the Unity plug
 | `--no-paint` | Hide the scalp paint. |
 | `--magenta` | Paint the haired scalp magenta to find bald spots. |
 | `--no-conform` | Skip the head conform. |
+
+The preview draws a stand-in for the viewport hair shader on lock cards: about 18 strands across each card, frayed tips
+past 55% of the length and darker grooves between strands. Colours are taken as linear (as three.js does), so dark hair
+renders at the same brightness as in the app.

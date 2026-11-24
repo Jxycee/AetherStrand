@@ -119,13 +119,13 @@ const cBase = new THREE.Color(sh.baseColor ?? '#5a4030');
 const cTip = new THREE.Color(sh.tipColor ?? '#7a5a40');
 const cSpec = new THREE.Color(sh.primarySpecColor ?? '#ffe8d0');
 const cSpec2 = new THREE.Color(sh.secondarySpecColor ?? '#a07050');
-[cRoot, cBase, cTip, cSpec, cSpec2].forEach((c) => c.convertSRGBToLinear());
+// THREE.Color(hex) is already linear (ColorManagement on), as the viewport's shader uniforms are
 if (scalpCoreMesh) scalpCoreMesh.color.copy(cRoot).multiplyScalar(0.55);
 const usePaint = !args.includes('--no-paint') && !args.includes('--magenta') && !!hair.scalpPaint;
 const useMagenta = args.includes('--magenta');
 const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
 // painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
-const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40').convertSRGBToLinear();
+const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40');
 const grainAt = (az: number, phi: number) => {
   const a = Math.floor(az / 0.011), b = Math.floor(phi / 0.011);
   const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
@@ -178,7 +178,10 @@ function renderView(vi: number) {
     const dx = x - v.c.x, dy = y - v.c.y, dz = z - v.c.z;
     return [W * 0.5 + (dx * r.x + dy * r.y + dz * r.z) * scale, H * 0.5 - (dx * u.x + dy * u.y + dz * u.z) * scale, dx * d.x + dy * d.y + dz * d.z];
   };
-  const tri = (p: number[][], c: number[][], wp?: number[][], skin?: number[]) => {
+  // hu: per-vertex [u across the lock, t along it, strand seed] for hair: a procedural stand-in for the viewport's strand
+  // alpha / groove maps (separate strands, darker grooves between them, frayed tips) so locks don't read as smooth leaves
+  const strandH = (i: number) => { let t = i * 0.1031; t -= Math.floor(t); t *= t + 33.33; t *= t + t; return t - Math.floor(t); };
+  const tri = (p: number[][], c: number[][], wp?: number[][], skin?: number[], hu?: number[][]) => {
     const minX = Math.max(0, Math.floor(Math.min(p[0][0], p[1][0], p[2][0])));
     const maxX = Math.min(W - 1, Math.ceil(Math.max(p[0][0], p[1][0], p[2][0])));
     const minY = Math.max(0, Math.floor(Math.min(p[0][1], p[1][1], p[2][1])));
@@ -196,6 +199,18 @@ function renderView(vi: number) {
         const z = w0 * p[0][2] + w1 * p[1][2] + w2 * p[2][2];
         const idx = y * W + x;
         if (z <= zbuf[idx]) continue;
+        let tone = 1;
+        if (hu) {
+          const uu = w0 * hu[0][0] + w1 * hu[1][0] + w2 * hu[2][0];
+          const tt = w0 * hu[0][1] + w1 * hu[1][1] + w2 * hu[2][1];
+          const sd = hu[0][2];
+          const sx = uu * 18 + sd * 37.0, si = Math.floor(sx), sf = sx - si;
+          const hs = strandH(si + Math.floor(sd * 997));
+          // tips fray: strands end at different lengths
+          if (tt > 0.55 && hs < ((tt - 0.55) / 0.45) * 0.9) continue;
+          const groove = Math.pow(Math.sin(Math.PI * sf), 0.6);
+          tone = (0.72 + 0.28 * groove) * (0.85 + 0.3 * hs);
+        }
         zbuf[idx] = z;
         if (wp && skin) {
           // c holds the lighting factor; blend skin and painted hair per pixel
@@ -209,9 +224,9 @@ function renderView(vi: number) {
           col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * st - skin[2]) * al);
           continue;
         }
-        col[idx * 3] = w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0];
-        col[idx * 3 + 1] = w0 * c[0][1] + w1 * c[1][1] + w2 * c[2][1];
-        col[idx * 3 + 2] = w0 * c[0][2] + w1 * c[1][2] + w2 * c[2][2];
+        col[idx * 3] = (w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0]) * tone;
+        col[idx * 3 + 1] = (w0 * c[0][1] + w1 * c[1][1] + w2 * c[2][1]) * tone;
+        col[idx * 3 + 2] = (w0 * c[0][2] + w1 * c[1][2] + w2 * c[2][2]) * tone;
       }
     }
   };
@@ -256,6 +271,7 @@ function renderView(vi: number) {
   const uv = geo.attributes.uv.array as Float32Array;
   const ao = geo.attributes.aLayerAO.array as Float32Array;
   const card = geo.attributes.aCardMask.array as Float32Array;
+  const seeds = geo.attributes.aStrandSeed.array as Float32Array;
   const index = geo.index!.array as Uint32Array;
   const nV = pos.length / 3;
   const vp: number[][] = new Array(nV);
@@ -288,7 +304,9 @@ function renderView(vi: number) {
     });
   }
   for (let i = 0; i < index.length; i += 3) {
-    tri([vp[index[i]], vp[index[i + 1]], vp[index[i + 2]]], [vc[index[i]], vc[index[i + 1]], vc[index[i + 2]]]);
+    const a0 = index[i], a1 = index[i + 1], a2 = index[i + 2];
+    const hu = card[a0] > 0.5 ? [[uv[a0 * 2], uv[a0 * 2 + 1], seeds[a0]], [uv[a1 * 2], uv[a1 * 2 + 1], seeds[a0]], [uv[a2 * 2], uv[a2 * 2 + 1], seeds[a0]]] : undefined;
+    tri([vp[a0], vp[a1], vp[a2]], [vc[a0], vc[a1], vc[a2]], undefined, undefined, hu);
   }
   // linear -> sRGB with a soft ACES-like shoulder
   for (let y = 0; y < H; y++) {

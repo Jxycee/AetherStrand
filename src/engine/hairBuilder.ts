@@ -236,6 +236,11 @@ export interface TexturedTopOptions {
   frontReach?: number;
   /** Base lock width. Default 0.028. */
   width?: number;
+  /**
+   * 0..1: front quiff. Front clumps that flow toward the face stand off the forehead instead of following it down, so
+   * the front lifts up and forward (textured crops, fades) rather than hanging as a fringe. Default 0.
+   */
+  quiff?: number;
   seed?: number;
   wMul?: number;
 }
@@ -298,11 +303,14 @@ export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions =
         const perp = new THREE.Vector2(-d0.y, d0.x);
         const fwdness = _ss((d0.y + 0.2) / 0.9); // 1 when the clump flows toward the face, 0 when it flows back or sideways
         const nL = 2 + Math.floor(rnd() * 2);
-        const liftAmt = (0.008 + 0.035 * lift) * (0.75 + 0.5 * rnd()) * (0.55 + 0.45 * fz) * (outer ? 1 : 0.55);
+        const liftAmt = (0.008 + 0.035 * lift) * (0.75 + 0.5 * rnd()) * (0.55 + 0.45 * fz) * (outer ? 1 : 0.55) * (0.45 + 0.55 * fwdness); // clumps flowing back lie flatter
         for (let k = 0; k < nL; k++) {
           const off = ((k - (nL - 1) / 2) / Math.max(1, nL - 1)) * 0.03 + (rnd() - 0.5) * 0.006;
           const reachT = 1 - 0.2 * Math.abs(off) / 0.015; // centre locks run furthest: pointed clump
           const pts: THREE.Vector3[] = [];
+          // quiff: where the surface drops away in front, the lock keeps its height (stands off the forehead)
+          const qK = (o.quiff ?? 0) * fwdness * _ss((fz - 0.45) / 0.4) * (outer ? 1 : 0.6);
+          const yRoot = domePoint(x0, z0, 0, 0.97).y;
           for (let n = 0; n < NODES_PER_LOCK; n++) {
             const t = n / (NODES_PER_LOCK - 1);
             const c = at(t * reachT);
@@ -311,8 +319,15 @@ export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions =
             // where the clump flows forward the tip stays up (lift and spike); where it flows back or down the sides it settles
             // back onto the skull, so the top melts into the sides instead of ending in a ledge
             const settle = (1 - fwdness) * _ss((t - 0.45) / 0.55);
-            const lh = 0.006 + liftAmt * Math.sqrt(t) * (1 - 0.85 * settle) + (outer ? spike * 0.04 * Math.pow(t, 3) * (0.35 + 0.65 * fz) * fwdness : 0);
-            pts.push(domePoint(c.x + perp.x * spread, c.y + perp.y * spread, lh, 0.97));
+            let lh = 0.006 + liftAmt * Math.sqrt(t) * (1 - 0.85 * settle) + (outer ? spike * 0.04 * Math.pow(t, 3) * (0.35 + 0.65 * fz) * fwdness : 0);
+            const cx = c.x + perp.x * spread, cz = c.y + perp.y * spread;
+            // lift goes along the scalp normal, but toward the front it is steered upward so the front stands up, not out
+            const base = domePoint(cx, cz, 0, 0.97);
+            const dir = domePoint(cx, cz, 1, 0.97).sub(base).normalize().lerp(new THREE.Vector3(0, 1, 0), 0.65 * fwdness * fz).normalize();
+            const p = base.clone().addScaledVector(dir, lh);
+            // quiff: give back the height the forehead drops away, plus a little rise, so the front stands up rather than out
+            if (qK > 0) p.y += qK * (Math.max(0, yRoot - domePoint(cx, cz, 0, 0.97).y) * 0.9 + 0.012 * Math.sin(Math.PI * Math.min(1, t * 1.2)));
+            pts.push(p);
           }
           specs.push({
             pointsLocal: pts, width: ((o.width ?? 0.028) + rnd() * 0.01) * wMul * (outer ? 1 : 1.3), thickness: 0.006,
@@ -2027,8 +2042,9 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
 
     // Zone 3: textured top (shared texturedTopLocks): pointed clumps growing from the crown whorl and flowing forward
     texturedTopLocks(specs, {
-      seed: seedU + 33, wMul, sweep: sweepSign * 0.4, forward: 0.85, extentZ: 0.29, lenCrown: 0.13, lenFront: 0.19,
-      lift: 0.25 + 0.5 * config.crownVolume, spike: 0.3 + 0.7 * config.spikeLift, reach: 0.88,
+      seed: seedU + 33, wMul, sweep: sweepSign * 0.4, forward: 0.85, extentZ: 0.29, lenCrown: 0.13, lenFront: 0.16,
+      lift: 0.6 + 0.9 * config.crownVolume, spike: 0.5 + 0.8 * config.spikeLift, reach: 0.86, frontReach: 0.0, spacing: 0.052, width: 0.021,
+      quiff: 0.35 + 0.5 * config.spikeLift,
     });
 
     // The front edge is the textured top meeting the painted hairline (forehead clear, tips lifted), as in the reference.

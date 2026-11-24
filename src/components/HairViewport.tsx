@@ -452,8 +452,18 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
 
   const builderKey = builderConfig ? JSON.stringify(builderConfig) : '';
 
+  // the hair is fitted to the loaded character's skull (head conform), as the Unity plugin and the preview renderer do
+  const characterHeadRef = useRef<CharacterHead | null>(characterHead);
+  characterHeadRef.current = characterHead;
+
   useEffect(() => {
     bustRigRef.current?.setCharacterHead(characterHead);
+    const sys = hairSystemRef.current;
+    const bust = bustRigRef.current;
+    if (sys && bust) {
+      sys.conformToHead(characterHead?.conform ?? null);
+      sys.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    }
   }, [characterHead]);
 
   useEffect(() => {
@@ -463,6 +473,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     const stats = builderConfig
       ? sys.loadCustomBuilder(builderConfig, presetId)
       : sys.loadPreset(presetId);
+    sys.conformToHead(characterHeadRef.current?.conform ?? null);
     sys.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
     bust.setScalpPaint(sys.scalpPaint);
     onStatsChange?.(stats);
@@ -624,6 +635,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     if (builderConfig) {
       hairSystem.loadCustomBuilder(builderConfig, presetId);
     }
+    if (characterHeadRef.current) hairSystem.conformToHead(characterHeadRef.current.conform);
     hairSystem.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
     bust.setScalpPaint(hairSystem.scalpPaint);
     scene.add(hairSystem.hairMesh);
