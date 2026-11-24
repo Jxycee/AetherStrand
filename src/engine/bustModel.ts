@@ -1,9 +1,18 @@
 import * as THREE from 'three';
+import type { CharacterHead } from './characterHead';
+import type { ScalpPaint } from './scalpPaint';
+import { createScalpPaintOverlay } from './scalpPaintMaterial';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export interface BustRig {
   rootGroup: THREE.Group;
   headPivot: THREE.Group;
-  setRootTint: (hexColor: string) => void;
+  /** Tints the scalp core and the scalp paint; the paint mixes root and base (baseHex optional). */
+  setRootTint: (hexColor: string, baseHex?: string, tipHex?: string) => void;
+  /** Shows the style's painted short-hair layer on the head (null hides it). */
+  setScalpPaint: (paint: ScalpPaint | null) => void;
+  /** Replaces the mannequin head, ears, neck and scalp core with a character's fitted head (null restores the mannequin). */
+  setCharacterHead: (head: CharacterHead | null) => void;
   dispose: () => void;
 }
 
@@ -153,8 +162,10 @@ export function createStylizedBust(): BustRig {
     earGroup.rotation.z = side * -0.1;
     return earGroup;
   };
-  headPivot.add(buildEar(-1));
-  headPivot.add(buildEar(1));
+  const earL = buildEar(-1);
+  const earR = buildEar(1);
+  headPivot.add(earL);
+  headPivot.add(earR);
 
   // 4. Realistic Slender Anatomical Neck (width ~0.22, gracefully connecting jaw to collarbone)
   const neckProfile = [
@@ -230,16 +241,57 @@ export function createStylizedBust(): BustRig {
   shadowPlane.position.set(0, -0.143, -0.032);
   rootGroup.add(shadowPlane);
 
+  // Scalp paint overlay on whichever head is shown (surfaces in head-pivot-local space)
+  const paintOverlay = createScalpPaintOverlay();
+  headPivot.add(paintOverlay.group);
+  const mannequinSurfaces = (): THREE.BufferGeometry[] => {
+    const core = scalpCoreGeo.clone();
+    core.translate(scalpCore.position.x, scalpCore.position.y, scalpCore.position.z);
+    return [headGeo, trackGeo(core)];
+  };
+  paintOverlay.setSurfaces(mannequinSurfaces());
+  paintOverlay.setPaint(null);
+  const mannequinParts: THREE.Object3D[] = [headMesh, scalpCore, earL, earR, neck];
+  let characterMesh: THREE.Mesh | null = null;
+  const characterMat = trackMat(new THREE.MeshStandardMaterial({ color: '#bdb4ae', roughness: 0.7, metalness: 0.0 }));
+
   return {
     rootGroup,
     headPivot,
-    setRootTint: (hexColor: string) => {
+    setRootTint: (hexColor: string, baseHex?: string, tipHex?: string) => {
       scalpCoreMat.color.set(hexColor).multiplyScalar(0.55);
+      paintOverlay.setColor(hexColor, baseHex, tipHex);
+    },
+    setScalpPaint: (paint) => paintOverlay.setPaint(paint),
+    setCharacterHead: (head) => {
+      if (characterMesh) {
+        headPivot.remove(characterMesh);
+        characterMesh.geometry.dispose();
+        characterMesh = null;
+      }
+      if (head) {
+        const soup = new THREE.BufferGeometry();
+        soup.setAttribute('position', new THREE.BufferAttribute(head.positions.slice(), 3));
+        const g = mergeVertices(soup, 1e-5);
+        soup.dispose();
+        g.computeVertexNormals();
+        characterMesh = new THREE.Mesh(g, characterMat);
+        characterMesh.name = 'CharacterHead_' + head.name;
+        characterMesh.castShadow = true;
+        characterMesh.receiveShadow = true;
+        headPivot.add(characterMesh);
+        paintOverlay.setSurfaces([g]);
+      } else {
+        paintOverlay.setSurfaces(mannequinSurfaces());
+      }
+      mannequinParts.forEach((o) => { o.visible = !head; });
     },
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
       textures.forEach((t) => t.dispose());
+      paintOverlay.dispose();
+      characterMesh?.geometry.dispose();
     },
   };
 }

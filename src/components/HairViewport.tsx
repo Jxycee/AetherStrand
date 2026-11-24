@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BustRig, createStylizedBust } from '../engine/bustModel';
+import type { CharacterHead } from '../engine/characterHead';
 import { HairPhysicsSystem, HairSimulationStats } from '../engine/hairPhysics';
 import {
   createHairShaderMaterial,
@@ -58,6 +59,8 @@ interface HairViewportProps {
   onStatsChange?: (stats: HairSimulationStats) => void;
   onAuditChange?: (audit: HairQualityAudit) => void;
   onTexturesReady?: (pack: HairTexturePack) => void;
+  /** Optional character head (OBJ, fitted like the Unity plugin) shown instead of the mannequin. */
+  characterHead?: CharacterHead | null;
 }
 
 const CAMERA_PRESETS: Record<CameraPresetId, { pos: [number, number, number]; target: [number, number, number] }> = {
@@ -301,6 +304,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     onStatsChange,
     onAuditChange,
     onTexturesReady,
+    characterHead = null,
   },
   ref
 ) {
@@ -449,6 +453,10 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   const builderKey = builderConfig ? JSON.stringify(builderConfig) : '';
 
   useEffect(() => {
+    bustRigRef.current?.setCharacterHead(characterHead);
+  }, [characterHead]);
+
+  useEffect(() => {
     const sys = hairSystemRef.current;
     const bust = bustRigRef.current;
     if (!sys || !bust) return;
@@ -456,6 +464,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
       ? sys.loadCustomBuilder(builderConfig, presetId)
       : sys.loadPreset(presetId);
     sys.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    bust.setScalpPaint(sys.scalpPaint);
     onStatsChange?.(stats);
     onAuditChange?.(sys.auditQuality(bust.headPivot, motionRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -465,7 +474,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     if (hairMatRef.current) {
       syncHairShaderUniforms(hairMatRef.current, shaderConfig, lightingPreset, visionMode);
     }
-    bustRigRef.current?.setRootTint(shaderConfig.rootColor);
+    bustRigRef.current?.setRootTint(shaderConfig.rootColor, shaderConfig.baseColor, shaderConfig.tipColor);
 
     const objs = sceneObjectsRef.current;
     if (objs) {
@@ -593,7 +602,8 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     renderRigRef.current = { renderer, scene, camera, controls, isSoftwareGl };
 
     const bust = createStylizedBust();
-    bust.setRootTint(shaderRef.current.rootColor);
+    bust.setRootTint(shaderRef.current.rootColor, shaderRef.current.baseColor, shaderRef.current.tipColor);
+    if (characterHead) bust.setCharacterHead(characterHead);
     scene.add(bust.rootGroup);
     bustRigRef.current = bust;
 
@@ -615,6 +625,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
       hairSystem.loadCustomBuilder(builderConfig, presetId);
     }
     hairSystem.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    bust.setScalpPaint(hairSystem.scalpPaint);
     scene.add(hairSystem.hairMesh);
     scene.add(hairSystem.colliderDebugGroup);
     scene.add(hairSystem.boneDebugLines);

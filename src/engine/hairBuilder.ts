@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyHairlineLook, deriveScalpPaint, makeScalpPaint, sampleArr, ScalpPaint } from './scalpPaint';
 import {
   HairBuilderArchetype,
   HairBuilderConfig,
@@ -197,6 +198,229 @@ export function sideburnLocks(specs: LockBuildSpec[], o: EarCutOptions & { count
       specs.push({ pointsLocal: pts, width: (o.width ?? 0.022) * (0.7 + 0.3 * u), thickness: 0.006, stiffnessBias: 0.97, layerAO: 0.9, layerOrder: o.layerOrder ?? 3, isFadeCap: o.isFadeCap, lockNormal: false, scalpRoot: 0.4 });
     }
   }
+}
+
+// ---- Shared textured top (short crops, undercuts, fades) ----
+/** Point on the scalp dome from its top-down projection (x, z in head-pivot space) lifted by `lift`; the projection is clamped to r^2 <= maxR2. */
+export function domePoint(x: number, z: number, lift: number, maxR2 = 0.88): THREE.Vector3 {
+  const nx = x / SCALP_RX, nz = z / SCALP_RZ;
+  const r2 = nx * nx + nz * nz;
+  const k = r2 > maxR2 ? Math.sqrt(maxR2 / r2) : 1.0;
+  const cx = nx * k, cz = nz * k;
+  const cy = Math.sqrt(Math.max(0.04, 1.0 - cx * cx - cz * cz));
+  return new THREE.Vector3(HEAD_CENTER_LOCAL.x + cx * (SCALP_RX + lift), HEAD_CENTER_LOCAL.y + cy * (SCALP_RY + lift), HEAD_CENTER_LOCAL.z + cz * (SCALP_RZ + lift));
+}
+
+export interface TexturedTopOptions {
+  /** Crown whorl (x, z) the hair grows away from. Default [0.02, -0.15]. */
+  whorl?: [number, number];
+  /** -1..1: front flow swings to web -X / +X. Default 0. */
+  sweep?: number;
+  /** 0..1: how much the front half flows straight forward instead of radially from the whorl. Default 0.8. */
+  forward?: number;
+  /** Lock length (projected, head-pivot units) at the crown and at the front. Defaults 0.13 / 0.2. */
+  lenCrown?: number;
+  lenFront?: number;
+  /** 0..1 overall volume (how far the locks stand off the scalp). Default 0.5. */
+  lift?: number;
+  /** 0..1: how much the tips kick up into spikes. Default 0.5. */
+  spike?: number;
+  /** Clump spacing (projected units). Default 0.065. */
+  spacing?: number;
+  /** Root area: ellipse half-axes in x and z (projected). Defaults 0.235 / 0.275. */
+  extentX?: number;
+  extentZ?: number;
+  /** Tips stop inside this projected dome radius^2, +-0.05 per clump (keeps the top from flaring over the sides). Default 0.86. */
+  reach?: number;
+  /** Extra reach^2 at the front centre so the front edge meets the hairline. Default 0.14. */
+  frontReach?: number;
+  /** Base lock width. Default 0.028. */
+  width?: number;
+  seed?: number;
+  wMul?: number;
+}
+
+/**
+ * Textured top: pointed clumps that grow from the crown whorl and flow forward (short crops, undercuts, fades, messy tops).
+ * Two layers: an under layer (shorter, flatter, layerOrder 2) fills the scalp; the outer layer (layerOrder 3) carries the texture.
+ * Each clump is 2-3 locks whose roots spread across the flow and whose tips converge on one point, so the surface
+ * reads as separate spikes rather than a helmet. Lengths grow from the crown to the front, lift grows toward the tips.
+ */
+export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions = {}): void {
+  let st = ((o.seed ?? 1337) >>> 0) || 1;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const [wx, wz] = o.whorl ?? [0.02, -0.15];
+  const sweep = o.sweep ?? 0, fwdK = o.forward ?? 0.8;
+  const ex = o.extentX ?? 0.235, ez = o.extentZ ?? 0.275;
+  const sp = o.spacing ?? 0.065;
+  const reach = o.reach ?? 0.86;
+  const lift = o.lift ?? 0.5, spike = o.spike ?? 0.5;
+  const wMul = o.wMul ?? 1;
+  const fwd = new THREE.Vector2(sweep * 0.35, 1).normalize();
+  const frontness = (z: number) => _ss((z - (wz - 0.02)) / 0.2);
+  const flow = (x: number, z: number): THREE.Vector2 => {
+    const rad = new THREE.Vector2(x - wx, z - wz);
+    const d = rad.length();
+    if (d < 1e-4) return fwd.clone();
+    rad.divideScalar(d);
+    const k = fwdK * frontness(z) * _ss(d / 0.05);
+    return rad.lerp(fwd, k).normalize();
+  };
+  // the front edge may run further down (to the hairline) than the sides, which stay inside `reach`
+  const inside = (x: number, z: number, jit = 0) => (x / SCALP_RX) ** 2 + (z / SCALP_RZ) ** 2 <= reach + jit + (o.frontReach ?? 0.14) * _ss(z / SCALP_RZ / 0.8) * Math.max(0, 1 - Math.abs(x) / 0.2);
+  for (let layer = 0; layer < 2; layer++) {
+    const s = layer === 0 ? sp : sp * 0.9;
+    for (let zc = -ez; zc <= ez; zc += s) {
+      for (let xc = -ex; xc <= ex; xc += s) {
+        const x0 = xc + (rnd() - 0.5) * s * 1.1 + (layer ? s * 0.5 : 0);
+        const z0 = zc + (rnd() - 0.5) * s * 1.1 + (layer ? s * 0.45 : 0);
+        if ((x0 / ex) ** 2 + (z0 / ez) ** 2 > 1) continue;
+        const fz = _ss((z0 + ez) / (2 * ez));
+        const outer = layer === 0;
+        let len = THREE.MathUtils.lerp(o.lenCrown ?? 0.13, o.lenFront ?? 0.2, fz) * (0.6 + 0.8 * rnd()) * (outer ? 1 : 0.7);
+        // march the clump centre line along the flow, stopping at the reach limit
+        const path: THREE.Vector2[] = [new THREE.Vector2(x0, z0)];
+        const jit = (rnd() - 0.5) * 0.1; // ragged edge: clumps stop at different heights
+        const steps = 8;
+        for (let k = 1; k <= steps; k++) {
+          const p = path[k - 1];
+          const d = flow(p.x, p.y);
+          const q = p.clone().addScaledVector(d, len / steps);
+          if (!inside(q.x, q.y, jit)) break;
+          path.push(q);
+        }
+        if (path.length < 3) continue;
+        const at = (t: number) => {
+          const f = t * (path.length - 1), i = Math.min(path.length - 2, Math.floor(f));
+          return path[i].clone().lerp(path[i + 1], f - i);
+        };
+        const d0 = flow(x0, z0);
+        const perp = new THREE.Vector2(-d0.y, d0.x);
+        const fwdness = _ss((d0.y + 0.2) / 0.9); // 1 when the clump flows toward the face, 0 when it flows back or sideways
+        const nL = 2 + Math.floor(rnd() * 2);
+        const liftAmt = (0.008 + 0.035 * lift) * (0.75 + 0.5 * rnd()) * (0.55 + 0.45 * fz) * (outer ? 1 : 0.55);
+        for (let k = 0; k < nL; k++) {
+          const off = ((k - (nL - 1) / 2) / Math.max(1, nL - 1)) * 0.03 + (rnd() - 0.5) * 0.006;
+          const reachT = 1 - 0.2 * Math.abs(off) / 0.015; // centre locks run furthest: pointed clump
+          const pts: THREE.Vector3[] = [];
+          for (let n = 0; n < NODES_PER_LOCK; n++) {
+            const t = n / (NODES_PER_LOCK - 1);
+            const c = at(t * reachT);
+            const spread = off * (1 - 0.75 * Math.pow(t, 1.5)); // tips gather but stay apart: a clump, not a cone
+            // lift rises near the root, then the lock lies along the surface (a smooth layered top, not shingles); spikes kick only at the tip
+            // where the clump flows forward the tip stays up (lift and spike); where it flows back or down the sides it settles
+            // back onto the skull, so the top melts into the sides instead of ending in a ledge
+            const settle = (1 - fwdness) * _ss((t - 0.45) / 0.55);
+            const lh = 0.006 + liftAmt * Math.sqrt(t) * (1 - 0.85 * settle) + (outer ? spike * 0.04 * Math.pow(t, 3) * (0.35 + 0.65 * fz) * fwdness : 0);
+            pts.push(domePoint(c.x + perp.x * spread, c.y + perp.y * spread, lh, 0.97));
+          }
+          specs.push({
+            pointsLocal: pts, width: ((o.width ?? 0.028) + rnd() * 0.01) * wMul * (outer ? 1 : 1.3), thickness: 0.006,
+            stiffnessBias: 0.96, layerAO: outer ? 0.8 + rnd() * 0.2 : 0.7, layerOrder: outer ? 3 : 2, smooth: 2, tipStart: 0.62,
+            lockNormal: false, scalpRoot: 0.55,
+          });
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Short side layer: flat, closely cut locks lying down the sides and back from under the top to where the painted fade
+ * takes over (`endPhi`, signed azimuth). Gives the upper sides real texture so a textured top blends into a painted fade
+ * instead of sitting on it like a cap. The forehead (|az| < 0.75) is skipped.
+ */
+export function sideLayerLocks(specs: LockBuildSpec[], o: { endPhi: (az: number) => number; topPhi?: number; count?: number; width?: number; seed?: number; wMul?: number; sweepBack?: number }): void {
+  let st = ((o.seed ?? 4242) >>> 0) || 1;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const n = o.count ?? 90;
+  for (let row = 0; row < 2; row++) {
+    for (let i = 0; i < n; i++) {
+      const az = -Math.PI + ((i + 0.5 + row * 0.5) / n) * Math.PI * 2 + (rnd() - 0.5) * 0.02;
+      if (Math.abs(az) < 0.75) continue;
+      const end = o.endPhi(az) - rnd() * 0.14; // ragged ends: no visible cut line
+      const start = (o.topPhi ?? 0.85) + row * 0.12 + (rnd() - 0.5) * 0.05;
+      if (end - start < 0.12) continue;
+      const back = (o.sweepBack ?? 0.12) * Math.sign(az) * _ss((Math.abs(az) - 0.75) / 0.8) * (1 - _ss((Math.abs(az) - 2.6) / 0.5));
+      const pts = buildSculptedLock({ thetaStart: az, thetaEnd: az + back, phiStart: start, phiEnd: end, baseLift: 0.003 - row * 0.001, midArch: 0.001, tipFlickOut: -0.002, napeHug: 1.4 });
+      specs.push({ pointsLocal: pts, width: ((o.width ?? 0.04) + rnd() * 0.01) * (o.wMul ?? 1), thickness: 0.004, stiffnessBias: 0.99, layerAO: 0.78 + 0.1 * row, layerOrder: 1 + row, lockNormal: false, scalpRoot: 0.5, tipStart: 0.55, smooth: 2 });
+    }
+  }
+}
+
+export interface FadePaintOptions extends EarCutOptions {
+  /** 0..1: fade band height as a share of (cut line at the ear - topPhi). 0 = a short band at the cut line. Default 0.4. */
+  fadeHeight?: number;
+  /** phi where the side hair begins (top of the side region). Default 1.0. */
+  topPhi?: number;
+  /** Paint density left at the cut line: 0 fades to skin, ~0.3 leaves visible stubble. Default 0.2. */
+  stubble?: number;
+  /** Softness of the final cut line (rad). Default 0.05. */
+  feather?: number;
+  /** Stipple of the partial-density band (0 smooth, 1 strongly dotted). Default 0.6. */
+  grain?: number;
+  /** 0..1: how much of the sideburn stays solid instead of fading (the fade band shrinks over the sideburn). Default 0.6. */
+  sideburnSolid?: number;
+}
+
+/**
+ * Painted fade (barber fade / taper) for any short-sided style: solid painted side hair down to the fade, a gradient to
+ * `stubble` at the ear-aligned cut line (pointed sideburn in front of the ear, arch over the ear, curved nape), then a soft
+ * edge. The front hairline gets no fade. Use it from SCALP_PAINT_BY_ARCHETYPE; it replaces modelled fade-cap locks.
+ */
+export function fadeScalpPaint(o: FadePaintOptions = {}): ScalpPaint {
+  const h = THREE.MathUtils.clamp(o.fadeHeight ?? 0.4, 0, 1);
+  const top = o.topPhi ?? 1.0;
+  // fade band (rad) measured at the ear arch, kept the same all round so the sideburn and nape fade like the sides
+  const archCut = earAlignedCutPhi(EAR_CENTER_THETA, o);
+  const band = Math.max(0.04, h * (archCut - top));
+  return makeScalpPaint({
+    full: (az) => {
+      const a = Math.abs(az);
+      const cut = earAlignedCutPhi(a, o);
+      const sideK = _ss((a - 0.75) / 0.6); // no fade on the forehead
+      // over the sideburn (from the start of its taper to just past its tip) the band shrinks so the sideburn reads solid
+      const tip = earSideburnTip(o);
+      const a0 = tip.theta - (o.sideburnTaper ?? 0.4);
+      const sb = _ss((a - a0) / 0.06) * (1 - _ss((a - tip.theta - 0.02) / 0.06));
+      return Math.max(top, cut - sideK * band * (1 - (o.sideburnSolid ?? 0.6) * sb));
+    },
+    edge: (az) => earAlignedCutPhi(Math.abs(az), o),
+    edgeDensity: (az) => THREE.MathUtils.lerp(0.55, o.stubble ?? 0.2, _ss((Math.abs(az) - 0.75) / 0.6)),
+    feather: o.feather ?? 0.05,
+    grain: o.grain ?? 0.6,
+  });
+}
+
+/** Lowest natural hairline (phi by signed azimuth): automatic scalp paint never goes past it onto the face, ears or neck. */
+export function naturalMaxHairlinePhi(az: number): number {
+  return earAlignedCutPhi(az, { sideburnLength: 0.7, hairlinePhi: 1.3, templeRecede: 0.04, napePhi: 2.2 });
+}
+
+/**
+ * Per-archetype scalp paint (see scalpPaint.ts). Styles that need painted short hair (fades, stubble sideburns, shaved
+ * patterns) register a function here; it receives the automatic contact paint and returns the paint to use.
+ */
+export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx: { config: HairBuilderConfig; specs: LockBuildSpec[]; auto: ScalpPaint }) => ScalpPaint>> = {};
+
+/** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
+export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
+  return {
+    hairlinePhi: 1.28, templeRecede: 0.12, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.26,
+    earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.4, config.backLength), napeCurve: 0.8,
+  };
+}
+SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.5, topPhi: 1.0, stubble: 0.22 });
+
+/**
+ * Scalp paint for a built style: automatic from the locks' scalp contact, or the archetype's own, then the shared hairline
+ * look (config.hairlineSoftness, hairlineIrregularity, scalpColor) so every style gets the same soft, hair-coloured edge.
+ */
+export function scalpPaintForConfig(config: HairBuilderConfig, specs: LockBuildSpec[]): ScalpPaint {
+  const auto = deriveScalpPaint(specs, naturalMaxHairlinePhi);
+  const f = SCALP_PAINT_BY_ARCHETYPE[config.archetype];
+  const base = f ? f({ config, specs, auto }) : auto;
+  return applyHairlineLook(base, { softness: config.hairlineSoftness, irregularity: config.hairlineIrregularity, color: config.scalpColor });
 }
 
 function buildSculptedLock(params: {
@@ -1770,33 +1994,10 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
   // ARCH-BEGIN undercut-fade
   if (arch === 'undercut-fade') {
     const sweepSign = config.bangsSweep >= 0 ? 1 : -1;
-    const fadeNapeEnd = THREE.MathUtils.lerp(2.12, 2.32, config.backLength);
-    const frontHairline = 1.28;
-    const smooth01 = (x: number) => { const c = THREE.MathUtils.clamp(x, 0, 1); return c * c * (3 - 2 * c); };
-    const mkU = (sd: number) => { let st = (sd >>> 0) || 1; return () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; }; };
     const seedU = (config.seed || 1337);
-    const rS1 = mkU(seedU + 11), rS2 = mkU(seedU + 22), rS3 = mkU(seedU + 33), rS4 = mkU(seedU + 44), rS5 = mkU(seedU + 55);
     // cut line phi(|theta|): shared ear-aligned helper (pointed sideburn in front of the ear, arch over the ear, curved nape)
-    const cutPhi = (th: number): number => earAlignedCutPhi(th, { hairlinePhi: frontHairline, templeRecede: 0.12, sideburnLength: THREE.MathUtils.lerp(0.55, 0.7, config.sideLength), sideburnTaper: 0.14, earClearance: 0.06, napePhi: fadeNapeEnd, napeCurve: 1.3 });
-    const domePt = (x: number, z: number, lift: number): THREE.Vector3 => {
-      const nx = x / SCALP_RX;
-      const nz = z / SCALP_RZ;
-      const r2 = nx * nx + nz * nz;
-      const scale = r2 > 0.88 ? Math.sqrt(0.88 / r2) : 1.0;
-      const cx = nx * scale;
-      const cz = nz * scale;
-      const cy = Math.sqrt(Math.max(0.04, 1.0 - cx * cx - cz * cz));
-      return new THREE.Vector3(
-        HEAD_CENTER_LOCAL.x + cx * (SCALP_RX + lift),
-        HEAD_CENTER_LOCAL.y + cy * (SCALP_RY + lift),
-        HEAD_CENTER_LOCAL.z + cz * (SCALP_RZ + lift)
-      );
-    };
-
-    // fade band geometry: the stubble gradient takes the lower ~45% of the top-to-cut-line height (wide on sides and back)
-    const FADE_TOP = 0.85;
-    const bandFrac = 0.45;
-    const fadeTopAt = (th: number): number => FADE_TOP + (1 - bandFrac) * (cutPhi(th) - FADE_TOP);
+    // the fade, sideburns and nape are painted (SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] uses the same cut options)
+    const cutPhi = (th: number): number => earAlignedCutPhi(th, undercutFadeCut(config));
 
     // Zone 1: dark dense scalp shell. Over the sides and back it reaches down into the fade band (solid dark stubble above the gradient).
     for (let tier = 0; tier < 4; tier++) {
@@ -1821,119 +2022,16 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       }
     }
 
-    // Zone 2: stubble fade (isFadeCap): five staggered rows of overlapping narrow ribbons from the upper side down to cut line - s*band.
-    // Each ribbon is dark first, then the shader gradient dissolves it; the rows end at different heights, so the union reads as a
-    // wide, gradual fade (about 40% of the cut height) instead of a thin dithered edge.
-    {
-      const fadeCols = Math.round(130 * density);
-      const fadeRowsN = 5;
-      for (let r = 0; r < fadeRowsN; r++) {
-        const sr = r / (fadeRowsN - 1);
-        for (let i = 0; i < fadeCols; i++) {
-          const theta = (i / fadeCols) * Math.PI * 2 + r * 0.37 * (Math.PI * 2 / fadeCols) + (rS2() - 0.5) * 0.015;
-          const cosT = Math.cos(theta);
-          if (cosT > 0.88) continue; // forehead is the fringe's job
-          const cutL = cutPhi(theta);
-          const band = 0.5 * (cutL - FADE_TOP);
-          const end = cutL - sr * band + (rS2() - 0.5) * 0.03;
-          const top = FADE_TOP - 0.02 + rS2() * 0.04;
-          if (top >= end - 0.15) continue;
-          const pts = buildSculptedLock({
-            thetaStart: theta, thetaEnd: theta, phiStart: top, phiEnd: end,
-            baseLift: 0.0016 + 0.0004 * r, midArch: 0.0, tipFlickOut: 0.0, napeHug: 1.55,
-          });
-          specs.push({
-            pointsLocal: pts, width: 0.05 * wMul, thickness: 0.004, stiffnessBias: 0.99,
-            layerAO: 0.8, layerOrder: 1, isFadeCap: true, fadeStart: 0.30 + rS2() * 0.12, lockNormal: false, scalpRoot: 0.35,
-          });
-        }
-      }
-      // narrow pointed sideburns in front of each ear (opaque, tapered, tip at about mid-ear height)
-      sideburnLocks(specs, { sideburnLength: 1.5, sideburnGap: 0.08, count: 5, width: 0.016, layerOrder: 2, baseLift: 0.004, rootPhi: 1.35 });
-    }
+    // Zone 2: the short sides are painted (fadeScalpPaint with strand streaks), as games do; the top sits directly on the
+    // paint. sideLayerLocks stays available for styles whose sides are long enough to need modelled hair.
 
-    // Zone 3: slightly spiky textured top. Distinct pointed clumps of 4-6 narrow locks converging on a raised tip,
-    // clear gaps between clumps (the dark shell shows in the gaps), clump lengths and lifts varied.
-    {
-      const dxC = 0.095, dzC = 0.098;
-      for (let layer = 0; layer < 2; layer++) {
-        for (let zc = -0.26; zc <= 0.22; zc += dzC) {
-          for (let xc = -0.2; xc <= 0.2; xc += dxC) {
-            const x0 = xc + (rS3() - 0.5) * dxC * 0.8 + layer * dxC * 0.5;
-            const z0 = zc + (rS3() - 0.5) * dzC * 0.8 + layer * dzC * 0.4;
-            if ((x0 / 0.235) * (x0 / 0.235) + (z0 / 0.275) * (z0 / 0.275) > 1.0) continue;
-            const zf = THREE.MathUtils.clamp((z0 + 0.28) / 0.56, 0, 1);
-            const fwdAng = sweepSign * (0.42 + (rS3() - 0.5) * 0.6);
-            const backAng = Math.PI - sweepSign * 0.3 + (rS3() - 0.5) * 0.4;
-            let ang = zf > 0.4 ? fwdAng : THREE.MathUtils.lerp(backAng, fwdAng, smooth01(zf / 0.4));
-            ang += Math.sign(x0 || 1) * 0.55 * smooth01((Math.abs(x0) - 0.09) / 0.1);
-            const sA = Math.sin(ang), cA = Math.cos(ang);
-            const len = (layer === 0 ? 0.09 + 0.13 * zf : 0.06 + 0.07 * zf) * (0.7 + rS3() * 0.6);
-            const nL = 3 + Math.floor(rS3() * 3);
-            const tl = (0.04 + 0.03 * rS3()) * (0.8 + 0.5 * config.crownVolume) * (0.75 + 0.4 * zf) * (layer === 0 ? 1 : 0.65);
-            const zCap = 0.26 - 0.06 * Math.pow(Math.abs(x0) / 0.25, 2);
-            const tipZ = z0 + cA * len;
-            const lenK = tipZ > zCap ? Math.max(0.3, (zCap - z0) / Math.max(1e-4, cA * len)) : 1;
-            if (z0 > zCap - 0.015) continue;
-            for (let k = 0; k < nL; k++) {
-              const off = (k - (nL - 1) / 2) / Math.max(1, nL - 1) * 0.06 + (rS3() - 0.5) * 0.006;
-              const rx = x0 + cA * off - sA * 0.02 * rS3();
-              const rz = z0 - sA * off - cA * 0.02 * rS3();
-              const mid = 1 - 0.3 * Math.abs(off) / 0.025; // central locks reach furthest, so the clump ends in a point
-              const tx = x0 + sA * len * lenK * mid + cA * off * 0.15;
-              const tz = z0 + cA * len * lenK * mid - sA * off * 0.15;
-              const pts: THREE.Vector3[] = [];
-              for (let n = 0; n < NODES_PER_LOCK; n++) {
-                const t = n / (NODES_PER_LOCK - 1);
-                const lift = 0.008 + tl * Math.pow(t, 1.9) + 0.008 * Math.pow(t, 6);
-                pts.push(domePt(THREE.MathUtils.lerp(rx, tx, t), THREE.MathUtils.lerp(rz, tz, t), lift));
-              }
-              specs.push({ pointsLocal: pts, width: (0.038 + rS3() * 0.014) * wMul, thickness: 0.009, stiffnessBias: 0.96, layerAO: 0.78 + rS3() * 0.22, layerOrder: layer === 0 ? 3 : 2, smooth: 2, roundness: 0.4, lockNormal: false, scalpRoot: 0.45 });
-            }
-          }
-        }
-      }
-    }
+    // Zone 3: textured top (shared texturedTopLocks): pointed clumps growing from the crown whorl and flowing forward
+    texturedTopLocks(specs, {
+      seed: seedU + 33, wMul, sweep: sweepSign * 0.4, forward: 0.85, extentZ: 0.29, lenCrown: 0.13, lenFront: 0.19,
+      lift: 0.25 + 0.5 * config.crownVolume, spike: 0.3 + 0.7 * config.spikeLift, reach: 0.88,
+    });
 
-    // Zone 4: short choppy asymmetric fringe: clumps of pointed locks swept toward the sweep side,
-    // hanging lower on the sweep side, receding on the far side.
-    {
-      const nClumps = 11;
-      for (let c = 0; c < nClumps; c++) {
-        const f = (c + (rS4() - 0.5) * 0.6) / (nClumps - 1);
-        const th0 = (f - 0.5) * 1.75 - sweepSign * 0.16;
-        const side = sweepSign * (f - 0.5); // -0.5 far side .. +0.5 sweep side
-        const endBase = frontHairline + 0.14 + config.bangsLength * 0.08 + (side > 0 ? side * 0.16 : side * 0.04) + (rS4() - 0.5) * 0.08;
-        const sweepTh = sweepSign * (0.25 + 0.2 * rS4());
-        const perC = 4;
-        for (let k = 0; k < perC; k++) {
-          const kk = k - (perC - 1) / 2;
-          const th = th0 + kk * 0.04 + (rS4() - 0.5) * 0.01;
-          const tipShort = Math.abs(kk) * 0.05 + (rS4() - 0.5) * 0.02;
-          const pts = buildSculptedLock({
-            thetaStart: th - sweepSign * 0.2, thetaEnd: th + sweepTh, phiStart: 0.5 + rS4() * 0.15,
-            phiEnd: endBase - tipShort,
-            baseLift: 0.04 + config.crownVolume * 0.03, midArch: 0.02, tipFlickOut: 0.02 + rS4() * 0.016, napeHug: 1.15,
-          });
-          specs.push({
-            pointsLocal: pts, width: (0.03 + rS4() * 0.008) * wMul, thickness: 0.011, stiffnessBias: 0.9,
-            layerAO: 0.92, layerOrder: 4, lockNormal: false, scalpRoot: 0.3,
-          });
-        }
-      }
-      // sparse fine strands between the clumps to soften the edge
-      for (let i = 0; i < 12; i++) {
-        const f = rS5();
-        const th = (f - 0.5) * 1.7;
-        const side = sweepSign * (f - 0.5);
-        const pts = buildSculptedLock({
-          thetaStart: th - sweepSign * 0.15, thetaEnd: th + sweepSign * 0.3, phiStart: 0.55 + rS5() * 0.1,
-          phiEnd: frontHairline - 0.02 + config.bangsLength * 0.08 + (side > 0 ? side * 0.1 : side * 0.05) + (rS5() - 0.5) * 0.1,
-          baseLift: 0.015, midArch: 0.008, tipFlickOut: 0.01, napeHug: 1.15,
-        });
-        specs.push({ pointsLocal: pts, width: 0.012 * wMul, thickness: 0.008, stiffnessBias: 0.9, layerAO: 0.94, layerOrder: 4, lockNormal: false, scalpRoot: 0.3 });
-      }
-    }
+    // The front edge is the textured top meeting the painted hairline (forehead clear, tips lifted), as in the reference.
 
     return specs;
   }
@@ -3773,7 +3871,7 @@ if (arch === 'twin-buns') {
           clearOfBody(p, 0.006 + L.ord * 0.003);
         }
         specs.push({
-          smooth: 3, roundness: 0.65, pointsLocal: pts, width: L.w * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+          smooth: 3, roundness: 0.65, tipStart: 0.66, tipWidth: 0.12, pointsLocal: pts, width: L.w * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
           stiffnessBias: 0.78, layerAO: 0.8 + L.ord * 0.05, layerOrder: L.ord, lockNormal: false, scalpRoot: 0.4,
         });
       }
@@ -3788,7 +3886,7 @@ if (arch === 'twin-buns') {
         const n = Math.round(46 * density);
         for (let i = 0; i < n; i++) {
           const f = (i + row * 0.33 + (cpRand() - 0.5) * 0.3) / (n - 1);
-          const b0 = THREE.MathUtils.lerp(-0.65, 1.25, THREE.MathUtils.clamp(f, 0, 1));
+          const b0 = THREE.MathUtils.lerp(-0.65, 1.31, THREE.MathUtils.clamp(f, 0, 1));
           const ff = _ss((b0 - 0.55) / 0.6); // 1 at the hairline (curtain), 0 at the crown
           const ffc = _ss((b0 - 0.92) / 0.3); // front-most: the curtain wings that arch over the forehead corners
           const aR = THREE.MathUtils.lerp(THREE.MathUtils.lerp(1.24, 0.9, ff), 0.74 + row * 0.04, ffc) + (cpRand() - 0.5) * 0.06;
@@ -3802,10 +3900,10 @@ if (arch === 'twin-buns') {
           const endY = THREE.MathUtils.lerp(sideY, curtainY, ff) + row * 0.02 * (1 - ff) + (cpRand() - 0.5) * jag * (1 - 0.5 * ff);
           const out = new THREE.Vector3(rel.x - HEAD_CENTER_LOCAL.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize().lerp(new THREE.Vector3(sd, 0, 0), ffc * 0.5).normalize();
           gravityFall(pts, 5, Math.max(0.04, (rel.y - endY) * (1.06 + ffc * 0.1)), {
-            out, flare: 0.05 + 0.05 * ff + 0.04 * ffc, bend: 0.42, margin: 0.008 + row * 0.006 + ffc * 0.01, flick: 0.01 * ff + 0.004,
+            out, flare: 0.03 + 0.025 * ff + 0.02 * ffc, bend: 0.42, margin: 0.008 + row * 0.006 + ffc * 0.01, flick: 0.01 * ff + 0.004,
           });
           specs.push({
-            smooth: 3, roundness: 0.65, pointsLocal: pts, width: (0.034 - row * 0.002) * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+            smooth: 3, roundness: 0.65, tipStart: 0.68, tipWidth: 0.12, pointsLocal: pts, width: (0.034 - row * 0.002) * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
             stiffnessBias: 0.8, layerAO: 0.84 + row * 0.05, layerOrder: 4 + row, lockNormal: false, scalpRoot: 0.42,
           });
         }
@@ -3826,7 +3924,7 @@ if (arch === 'twin-buns') {
         const out = new THREE.Vector3(rel.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
         gravityFall(pts, 6, Math.max(0.04, rel.y - (sideY + 0.04 + (cpRand() - 0.5) * jag)), { out, flare: 0.04, bend: 0.5, margin: 0.01 });
         specs.push({
-          smooth: 3, roundness: 0.6, pointsLocal: pts, width: 0.04 * wMul, thickness: 0.011,
+          smooth: 3, roundness: 0.6, tipStart: 0.66, tipWidth: 0.12, pointsLocal: pts, width: 0.04 * wMul, thickness: 0.011,
           stiffnessBias: 0.8, layerAO: 0.8, layerOrder: 2, lockNormal: false, scalpRoot: 0.4,
         });
       }

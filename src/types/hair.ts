@@ -63,6 +63,23 @@ export interface HairBuilderConfig {
   density: number;      // 0.65 to 1.25
   strandWidth: number;  // 0.75 to 1.25
   seed: number;
+  /**
+   * Optional, 0 to 1: how far up the sides a painted fade climbs (0 = a tight band at the cut line, 1 = up to where the
+   * top hair starts). Used by styles with a painted fade (see fadeScalpPaint in hairBuilder.ts). Default 0.4.
+   */
+  fadeHeight?: number;
+  /**
+   * Optional, 0 to 1: how softly the painted hairline (and any fade edge) blends into the skin, every style.
+   * 0 = crisp barbered edge, 1 = very soft and wispy. Default 0.5. See applyHairlineLook in scalpPaint.ts.
+   */
+  hairlineSoftness?: number;
+  /** Optional, 0 to 1: unevenness of the painted hairline edge (0 = a clean drawn curve). Default 0.5. */
+  hairlineIrregularity?: number;
+  /**
+   * Optional '#rrggbb': colour of the painted hair at the hairline, fade and sideburns. Leave unset to match the hair's
+   * own colour (root-to-base tone); set it to tint the hairline differently (e.g. greyer temples).
+   */
+  scalpColor?: string;
 }
 
 export interface ShaderConfig {

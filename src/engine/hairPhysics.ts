@@ -9,7 +9,9 @@ import {
   MotionMode,
   PhysicsConfig,
 } from '../types/hair';
-import { buildCustomHairSpecs, LockBuildSpec } from './hairBuilder';
+import { buildCustomHairSpecs, LockBuildSpec, naturalMaxHairlinePhi, scalpPaintForConfig } from './hairBuilder';
+import { deriveScalpPaint, evalScalpPaint, scalpAngles, type ScalpPaint } from './scalpPaint';
+import { conformPoint, type HeadConformMap } from './characterHead';
 
 export interface SphereColliderDef {
   localCenter: THREE.Vector3;
@@ -3200,6 +3202,8 @@ export class HairPhysicsSystem {
   private impulseVel = new THREE.Vector3();
   private simTime = 0;
   private lastWidthScale = 1.0;
+  /** Painted short-hair layer under the locks for the current builder style (null for legacy presets). See scalpPaint.ts. */
+  public scalpPaint: ScalpPaint | null = null;
   private bakedWidthScale = 1.0;
 
   constructor(material: THREE.ShaderMaterial, initialPreset: HairPresetId) {
@@ -3241,6 +3245,7 @@ export class HairPhysicsSystem {
     this.isCustomBuilder = false;
     this.locks = generateLocksForPreset(preset);
     bakeCollisionFreeRestPose(this.locks);
+    this.scalpPaint = deriveScalpPaint(this.locks.map((l) => ({ pointsLocal: l.particles.map((p) => p.restLocal) })), naturalMaxHairlinePhi);
     this.bakedWidthScale = 1.0;
     this.lastWidthScale = 1.0;
     this.buildCohesionGraph();
@@ -3255,6 +3260,7 @@ export class HairPhysicsSystem {
     this.activePreset = basePreset;
     this.isCustomBuilder = true;
     const specs = buildCustomHairSpecs(config);
+    this.scalpPaint = scalpPaintForConfig(config, specs);
     this.locks = locksFromSpecs(specs, config.seed || 1337);
     bakeCollisionFreeRestPose(this.locks);
     this.bakedWidthScale = 1.0;
@@ -3562,6 +3568,21 @@ export class HairPhysicsSystem {
     this.boneDebugLines.geometry = boneGeo;
   }
 
+  /**
+   * Fits the built hair to a character's real skull (see characterHead.ts conformPoint): every rest node is pushed outward
+   * by how far the skull stands out from the web scalp ellipsoid there. Call after a load; pass null to undo. Call
+   * snapToHead afterwards to refresh positions and the mesh.
+   */
+  public conformToHead(map: HeadConformMap | null): void {
+    for (const lock of this.locks) {
+      for (const pt of lock.particles as any[]) {
+        if (!pt.builtRest) pt.builtRest = pt.restLocal.clone();
+        pt.restLocal.copy(pt.builtRest);
+        if (map) conformPoint(map, pt.restLocal, naturalMaxHairlinePhi);
+      }
+    }
+  }
+
   public snapToHead(headPivot: THREE.Object3D, widthScale = this.lastWidthScale): void {
     this.lastWidthScale = widthScale;
     headPivot.updateMatrixWorld(true);
@@ -3725,6 +3746,12 @@ export class HairPhysicsSystem {
             break;
           }
         }
+      }
+      // painted short hair (fades, sideburns) covers the scalp too: count points the scalp paint fills at least half
+      if (!covered && this.scalpPaint) {
+        const sp = SCALP_AUDIT_POINTS[i];
+        const a = scalpAngles(sp.x, sp.y, sp.z);
+        covered = evalScalpPaint(this.scalpPaint, a.az, a.phi) >= 0.5;
       }
       if (covered) coveredScalpPts++;
     }

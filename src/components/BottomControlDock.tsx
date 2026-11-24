@@ -525,6 +525,46 @@ export function BottomControlDock({
                   unit="x"
                   onChange={(strandWidth) => onChangeBuilder({ strandWidth })}
                 />
+                <SliderRow
+                  label="Hairline Softness"
+                  value={activeBuilder.hairlineSoftness ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineSoftness) => onChangeBuilder({ hairlineSoftness })}
+                />
+                <SliderRow
+                  label="Hairline Unevenness"
+                  value={activeBuilder.hairlineIrregularity ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineIrregularity) => onChangeBuilder({ hairlineIrregularity })}
+                />
+                <SliderRow
+                  label="Fade Height"
+                  value={activeBuilder.fadeHeight ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeHeight) => onChangeBuilder({ fadeHeight })}
+                />
+                <div className="flex flex-col gap-1">
+                  <ColorSwatchInput
+                    label={activeBuilder.scalpColor ? 'Hairline Tint' : 'Hairline: hair colour'}
+                    value={activeBuilder.scalpColor ?? '#3a2a20'}
+                    onChange={(scalpColor) => onChangeBuilder({ scalpColor })}
+                  />
+                  {activeBuilder.scalpColor && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeBuilder({ scalpColor: undefined })}
+                      className="text-[11px] text-slate-400 hover:text-slate-200 text-left cursor-pointer"
+                    >
+                      Match hair colour
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Row 3: Procedural Generator & Live Sculpt Status */}

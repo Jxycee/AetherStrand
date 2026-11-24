@@ -9,11 +9,17 @@
 //   npx tsx tools/preview/cpu_preview.ts --arch curtain-part [--seed 7001] [--out preview.png]
 //   npx tsx tools/preview/cpu_preview.ts --recipe recipe.json [--out preview.png]
 //   Close-up: add --views back,3q --zoom 2.5 --cy 0.42  (views: front,3q,left,back,top; cy = centre height in metres)
+//   Character head: add --head path/to/Head.obj [--chin-y 1.5855]  (fitted like the Unity plugin; replaces the web bust head,
+//   ears and neck; no scalp core, so gaps show skin as they do in Unity)
+//   Scalp paint (the painted short-hair layer, scalpPaint.ts) is drawn on the head. --no-paint hides it; --magenta paints the
+//   bust's haired region magenta instead (old gap check).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import * as THREE from 'three';
 import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 import { generateRandomHairstyle, scalpRegionPhi } from '../../src/engine/hairBuilder';
+import { loadCharacterHead } from '../../src/engine/characterHead';
+import { evalScalpPaint, paintStreak, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
 
 const args = process.argv.slice(2);
 const arg = (k: string, d?: string) => {
@@ -38,23 +44,29 @@ headPivot.position.set(0, 0.44, 0);
 rootGroup.add(headPivot);
 rootGroup.updateMatrixWorld(true);
 hair.loadCustomBuilder(recipe.builder, recipe.presetId);
+// --head: fit the hair to that skull as the plugin does (characterHead.ts conform map); --no-conform shows it unfitted
+const headArg = arg('--head');
+if (headArg && !args.includes('--no-conform')) {
+  hair.conformToHead(loadCharacterHead(fs.readFileSync(headArg, 'utf8'), headArg, arg('--chin-y') ? Number(arg('--chin-y')) : undefined).conform);
+}
 const wScale = recipe.physics?.strandWidthScale ?? 1;
 hair.snapToHead(headPivot, wScale);
 const audit = hair.auditQuality(headPivot, 'rest');
 const geo: THREE.BufferGeometry = hair.geometry;
 
 // ---------- bust proxy (dimensions copied from src/engine/bustModel.ts) ----------
-type Mesh = { geo: THREE.BufferGeometry; color: THREE.Color; flat?: boolean; scalpMask?: boolean };
+type Mesh = { geo: THREE.BufferGeometry; color: THREE.Color; flat?: boolean; scalpMask?: boolean; paint?: boolean };
 const meshes: Mesh[] = [];
-const add = (g: THREE.BufferGeometry, m: THREE.Matrix4, hex: string, flat = false, scalpMask = false) => {
+const add = (g: THREE.BufferGeometry, m: THREE.Matrix4, hex: string, flat = false, scalpMask = false, paint = false) => {
   const gg = g.toNonIndexed();
   gg.applyMatrix4(m);
   gg.computeVertexNormals();
-  meshes.push({ geo: gg, color: new THREE.Color(hex), flat, scalpMask });
+  meshes.push({ geo: gg, color: new THREE.Color(hex), flat, scalpMask, paint });
 };
 // The head lathe pokes through the scalp dome at the crown, so its haired region is painted magenta too:
 // hairline phi (from the crown apex, head-pivot space) by azimuth, front 1.28 -> above the ear 1.62 -> nape 2.1.
 const MAGENTA = new THREE.Color('#ff00ff');
+const WHITE = new THREE.Color(1, 1, 1);
 const isScalpRegion = (x: number, y: number, z: number) => {
   const lx = x, ly = y - 0.44 - 0.425, lz = z + 0.01;
   const phi = Math.acos(Math.max(-1, Math.min(1, (ly / 0.318) / Math.hypot(lx / 0.282, ly / 0.318, lz / 0.31))));
@@ -66,26 +78,36 @@ const M = (pos: [number, number, number], rot: [number, number, number] = [0, 0,
 };
 const P = M([0, 0.44, 0]);
 const V2 = (a: number, b: number) => new THREE.Vector2(a, b);
-const headGeo = new THREE.LatheGeometry([V2(0, 0), V2(0.052, 0.012), V2(0.122, 0.055), V2(0.192, 0.135), V2(0.244, 0.245), V2(0.272, 0.365), V2(0.28, 0.48), V2(0.264, 0.585), V2(0.208, 0.672), V2(0.115, 0.725), V2(0, 0.742)], 48);
-headGeo.scale(0.97, 1.0, 1.09);
-add(headGeo, P, '#9c8678', false, true);
-const scalp = new THREE.SphereGeometry(0.286, 48, 32);
-scalp.scale(0.96, 1.08, 1.07);
-// The scalp core pokes slightly out of the face lathe beside the temples. The web tints it to the root colour x0.55,
-// so only the part inside the haired region is painted magenta; outside it is drawn as the web shows it.
-add(scalp, M([0, 0.425, -0.015], [0, 0, 0], [1, 1, 1], P), '#000000', true, true);
-const scalpCoreMesh = meshes[meshes.length - 1];
-for (const side of [-1, 1]) {
-  const earM = M([side * 0.256, 0.242, -0.028], [0, side * -0.26, side * -0.1], [1, 1, 1], P);
-  const outer = new THREE.SphereGeometry(0.062, 18, 14);
-  outer.scale(0.28, 1.15, 0.68);
-  add(outer, earM, '#b49482');
-  const helix = new THREE.TorusGeometry(0.04, 0.01, 10, 20, Math.PI * 1.48);
-  add(helix, M([side * 0.008, 0.004, -0.004], [0, side * Math.PI * 0.44, side * -0.42], [1, 1, 1], earM), '#b49482');
+const headPath = arg('--head');
+let scalpCoreMesh: Mesh | null = null;
+if (headPath) {
+  const ch = loadCharacterHead(fs.readFileSync(headPath, 'utf8'), headPath, arg('--chin-y') ? Number(arg('--chin-y')) : undefined);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(ch.positions, 3));
+  add(g, P, '#b8b2ae', false, false, true);
+  console.error('head fit', JSON.stringify({ scale: ch.fit.scale, offset: ch.fit.offset, chinY: ch.fit.chinY, landmarks: ch.landmarks }));
+} else {
+  const headGeo = new THREE.LatheGeometry([V2(0, 0), V2(0.052, 0.012), V2(0.122, 0.055), V2(0.192, 0.135), V2(0.244, 0.245), V2(0.272, 0.365), V2(0.28, 0.48), V2(0.264, 0.585), V2(0.208, 0.672), V2(0.115, 0.725), V2(0, 0.742)], 48);
+  headGeo.scale(0.97, 1.0, 1.09);
+  add(headGeo, P, '#9c8678', false, true, true);
+  const scalp = new THREE.SphereGeometry(0.286, 48, 32);
+  scalp.scale(0.96, 1.08, 1.07);
+  // The scalp core pokes slightly out of the face lathe beside the temples. The web tints it to the root colour x0.55,
+  // so only the part inside the haired region is painted magenta; outside it is drawn as the web shows it.
+  add(scalp, M([0, 0.425, -0.015], [0, 0, 0], [1, 1, 1], P), '#000000', true, true, true);
+  scalpCoreMesh = meshes[meshes.length - 1];
+  for (const side of [-1, 1]) {
+    const earM = M([side * 0.256, 0.242, -0.028], [0, side * -0.26, side * -0.1], [1, 1, 1], P);
+    const outer = new THREE.SphereGeometry(0.062, 18, 14);
+    outer.scale(0.28, 1.15, 0.68);
+    add(outer, earM, '#b49482');
+    const helix = new THREE.TorusGeometry(0.04, 0.01, 10, 20, Math.PI * 1.48);
+    add(helix, M([side * 0.008, 0.004, -0.004], [0, side * Math.PI * 0.44, side * -0.42], [1, 1, 1], earM), '#b49482');
+  }
+  const neck = new THREE.LatheGeometry([V2(0.145, -0.22), V2(0.118, -0.12), V2(0.112, -0.02), V2(0.122, 0.08)], 28);
+  neck.scale(0.96, 1.0, 1.04);
+  add(neck, M([0, 0.01, -0.032], [0, 0, 0], [1, 1, 1], P), '#9c8678');
 }
-const neck = new THREE.LatheGeometry([V2(0.145, -0.22), V2(0.118, -0.12), V2(0.112, -0.02), V2(0.122, 0.08)], 28);
-neck.scale(0.96, 1.0, 1.04);
-add(neck, M([0, 0.01, -0.032], [0, 0, 0], [1, 1, 1], P), '#9c8678');
 const torso = new THREE.LatheGeometry([V2(0, 0), V2(0.24, 0), V2(0.36, 0.14), V2(0.41, 0.24), V2(0.34, 0.305), V2(0.175, 0.355), V2(0.145, 0.39), V2(0.132, 0.39), V2(0.12, 0.32)], 40);
 torso.scale(1.12, 1.0, 0.56);
 add(torso, M([0, -0.04, -0.032]), '#454955');
@@ -98,7 +120,24 @@ const cTip = new THREE.Color(sh.tipColor ?? '#7a5a40');
 const cSpec = new THREE.Color(sh.primarySpecColor ?? '#ffe8d0');
 const cSpec2 = new THREE.Color(sh.secondarySpecColor ?? '#a07050');
 [cRoot, cBase, cTip, cSpec, cSpec2].forEach((c) => c.convertSRGBToLinear());
-scalpCoreMesh.color.copy(cRoot).multiplyScalar(0.55);
+if (scalpCoreMesh) scalpCoreMesh.color.copy(cRoot).multiplyScalar(0.55);
+const usePaint = !args.includes('--no-paint') && !args.includes('--magenta') && !!hair.scalpPaint;
+const useMagenta = args.includes('--magenta');
+const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
+// painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
+const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40').convertSRGBToLinear();
+const grainAt = (az: number, phi: number) => {
+  const a = Math.floor(az / 0.011), b = Math.floor(phi / 0.011);
+  const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return h - Math.floor(h);
+};
+/** paint alpha at a head-pivot-local point */
+const paintAlpha = (x: number, y: number, z: number) => {
+  if (!paint) return 0;
+  const a = scalpAngles(x, y, z);
+  const dens = evalScalpPaint(paint, a.az, a.phi);
+  return scalpPaintAlpha(dens, paint.grain, grainAt(a.az, a.phi));
+};
 
 const W = 440, H = 480;
 const views: { name: string; d: THREE.Vector3; up: THREE.Vector3; c: THREE.Vector3; ext: number }[] = [];
@@ -139,7 +178,7 @@ function renderView(vi: number) {
     const dx = x - v.c.x, dy = y - v.c.y, dz = z - v.c.z;
     return [W * 0.5 + (dx * r.x + dy * r.y + dz * r.z) * scale, H * 0.5 - (dx * u.x + dy * u.y + dz * u.z) * scale, dx * d.x + dy * d.y + dz * d.z];
   };
-  const tri = (p: number[][], c: number[][]) => {
+  const tri = (p: number[][], c: number[][], wp?: number[][], skin?: number[]) => {
     const minX = Math.max(0, Math.floor(Math.min(p[0][0], p[1][0], p[2][0])));
     const maxX = Math.min(W - 1, Math.ceil(Math.max(p[0][0], p[1][0], p[2][0])));
     const minY = Math.max(0, Math.floor(Math.min(p[0][1], p[1][1], p[2][1])));
@@ -158,6 +197,18 @@ function renderView(vi: number) {
         const idx = y * W + x;
         if (z <= zbuf[idx]) continue;
         zbuf[idx] = z;
+        if (wp && skin) {
+          // c holds the lighting factor; blend skin and painted hair per pixel
+          const k = w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0];
+          const lx = w0 * wp[0][0] + w1 * wp[1][0] + w2 * wp[2][0], ly = w0 * wp[0][1] + w1 * wp[1][1] + w2 * wp[2][1] - 0.44, lz = w0 * wp[0][2] + w1 * wp[1][2] + w2 * wp[2][2];
+          const al = paintAlpha(lx, ly, lz);
+          let st = 1;
+          if (al > 0) { const sa = scalpAngles(lx, ly, lz); st = 0.82 + 0.36 * paintStreak(sa.az, sa.phi); }
+          col[idx * 3] = k * (skin[0] + (cPaint.r * st - skin[0]) * al);
+          col[idx * 3 + 1] = k * (skin[1] + (cPaint.g * st - skin[1]) * al);
+          col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * st - skin[2]) * al);
+          continue;
+        }
         col[idx * 3] = w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0];
         col[idx * 3 + 1] = w0 * c[0][1] + w1 * c[1][1] + w2 * c[2][1];
         col[idx * 3 + 2] = w0 * c[0][2] + w1 * c[1][2] + w2 * c[2][2];
@@ -177,10 +228,22 @@ function renderView(vi: number) {
     const nor = m.geo.attributes.normal.array as Float32Array;
     for (let i = 0; i < pos.length; i += 9) {
       const p: number[][] = [], c: number[][] = [];
+      if (paint && m.paint) {
+        const wp: number[][] = [];
+        for (let j = 0; j < 3; j++) {
+          const o = i + j * 3;
+          p.push(proj(pos[o], pos[o + 1], pos[o + 2]));
+          wp.push([pos[o], pos[o + 1], pos[o + 2]]);
+          const k = shadeBody(nor[o], nor[o + 1], nor[o + 2], WHITE, !!m.flat)[0];
+          c.push([k, k, k]);
+        }
+        tri(p, c, wp, [m.color.r, m.color.g, m.color.b]);
+        continue;
+      }
       for (let j = 0; j < 3; j++) {
         const o = i + j * 3;
         p.push(proj(pos[o], pos[o + 1], pos[o + 2]));
-        const scalpHere = !!m.scalpMask && isScalpRegion(pos[o], pos[o + 1], pos[o + 2]);
+        const scalpHere = useMagenta && !!m.scalpMask && isScalpRegion(pos[o], pos[o + 1], pos[o + 2]);
         c.push(shadeBody(nor[o], nor[o + 1], nor[o + 2], scalpHere ? MAGENTA : m.color, !!m.flat || scalpHere));
       }
       tri(p, c);

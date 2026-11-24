@@ -46,6 +46,8 @@ export function exportGeometry(recipe: any): any {
     coordinateSystem: 'blender_z_up_neg_y_front',
     solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight per lock; mesh: isFadeCap,fadeStart,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq when set',
     lockCount: exported.length,
+    // Painted short-hair layer under the locks (scalpPaint.ts); the plugin builds a scalp shell from the character's head.
+    ...(hair.scalpPaint ? { scalpPaint: hair.scalpPaint } : {}),
     locks: exported,
   };
 }
