@@ -36,7 +36,8 @@ export type HairBuilderArchetype =
   | 'emo-sweep'
   | 'short-crop'
   | 'samurai-topknot'
-  | 'braided-crown';
+  | 'braided-crown'
+  | 'undercut-fade';
 
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;
