@@ -77,7 +77,12 @@ shows as dark teeth along the hairline.
   - `frontInset` (default 0.03 rad): at the front, roots start just behind the painted hairline, so the forehead shows the
     paint's soft hairline and the hair rises from behind it.
   - `clumpSpacing` (default 0.055) and `clump` (0..1, default 0.55): clump size and how strongly tips gather.
-  - `length`, `volume` (height off the scalp), `spike` (spiked clump tips on the top), `stand` (front lift), `sweep`.
+  - `length`, `volume` (height of the hair surface), `spike` (spiked clump tips on the top), `stand` and `quiff` (front lift:
+    low where the hair leaves the hairline, highest a few centimetres back, rising straight up rather than out), `sweep`, `sideTaper` (0..1, default 0.5: how much flatter the sides and back lie than the top, so the head
+    doesn't read as a bowl).
+  - Every lock lies on one smooth hair surface whose height is set by position on the head, not per lock. Neighbouring
+    locks then curve the same way in the same place, so the highlights run as broad bands across the clumps. Per-lock
+    height profiles put a highlight dash on every lock.
   - `rigid` (default true): see Rigid locks below.
 - `sideLayerLocks(specs, options)`: two rows of short locks lying on the sides down to a per-azimuth end. Use it only
   when the sides are long enough to need modelled hair; short sides are better painted.
