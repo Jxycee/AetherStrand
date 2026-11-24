@@ -78,6 +78,8 @@ interface VolumetricHairLock {
    * where the bake would crumple overlapping locks into knots and flakes.
    */
   rigid?: boolean;
+  /** Optional 0..1: shading tangent flattened onto the scalp, so close-cut locks shine in bands (LockBuildSpec.surfaceShine). */
+  surfaceShine?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -2518,6 +2520,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       rippleFreq: (sp as any).rippleFreq,
       colorRange: (sp as any).colorRange,
       rigid: (sp as any).rigid === true || undefined,
+      surfaceShine: (sp as any).surfaceShine > 0 ? Math.min(1, (sp as any).surfaceShine) : undefined,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -3690,8 +3693,10 @@ export class HairPhysicsSystem {
         if (!lock.lockNormal && rootClearM > 0.044) {
           floatingRootCount++;
         }
-        // Flag crown dome hooks (non-spike top dome strand rising >10mm vertically above root at k=1)
-        if (!lock.lockNormal && particles[0].restLocal.y > 0.67) {
+        // Flag crown dome hooks (non-spike top dome strand rising >10mm vertically above root at k=1). Rigid locks are
+        // skipped: they keep the shape they were built with (a crop's root rising out of the scalp, a quiff), so a rise
+        // there is the design, not the solver hooking a strand up
+        if (!lock.lockNormal && !lock.rigid && particles[0].restLocal.y > 0.67) {
           _vLocal.copy(particles[1].pos).sub(_headWorldPos).applyQuaternion(_invHeadWorldQuat);
           if (_vLocal.y - particles[0].restLocal.y > 0.01) {
             crownHookCount++;
@@ -5244,6 +5249,7 @@ export class HairPhysicsSystem {
       const effThickScale = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effWidthScale);
       const baseHalfW = lock.baseWidth * 0.5 * effWidthScale;
       const baseHalfT = lock.baseThickness * 0.5 * effThickScale;
+      const shine = lock.surfaceShine ?? 0;
 
       const rn = lock.rootNormalLocal;
       let odx = m00 * rn.x + m01 * rn.y + m02 * rn.z;
@@ -5296,6 +5302,15 @@ export class HairPhysicsSystem {
         let hnz = pz0 - hcz;
         const hnInv = 1.0 / (Math.sqrt(hnx * hnx + hny * hny + hnz * hnz) || 1.0);
         hnx *= hnInv; hny *= hnInv; hnz *= hnInv;
+        // shading tangent: with surfaceShine, the lock's direction along the scalp (its rise off the skin removed), so
+        // close-cut locks shine together in bands instead of each catching the light at its own bend
+        let stx = tx, sty = ty, stz = tz;
+        if (shine > 0) {
+          const tn = (tx * hnx + ty * hny + tz * hnz) * shine;
+          stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
+          const sl = Math.sqrt(stx * stx + sty * sty + stz * stz);
+          if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
+        }
 
         let sx: number, sy: number, sz: number;
         if (!lockNormal) {
@@ -5368,9 +5383,9 @@ export class HairPhysicsSystem {
           headNormals[o + 1] = hny;
           headNormals[o + 2] = hnz;
 
-          tangents[o] = tx;
-          tangents[o + 1] = ty;
-          tangents[o + 2] = tz;
+          tangents[o] = stx;
+          tangents[o + 1] = sty;
+          tangents[o + 2] = stz;
 
           vIdx++;
         }
@@ -5417,6 +5432,12 @@ export class HairPhysicsSystem {
       headNormals[tipO + 1] = thny;
       headNormals[tipO + 2] = thnz;
 
+      if (shine > 0) {
+        const tn = (ttx * thnx + tty * thny + ttz * thnz) * shine;
+        const fx = ttx - thnx * tn, fy = tty - thny * tn, fz = ttz - thnz * tn;
+        const fl = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (fl > 1e-4) { ttx = fx / fl; tty = fy / fl; ttz = fz / fl; }
+      }
       tangents[tipO] = ttx;
       tangents[tipO + 1] = tty;
       tangents[tipO + 2] = ttz;

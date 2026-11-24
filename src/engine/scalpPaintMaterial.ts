@@ -85,7 +85,7 @@ export interface ScalpPaintOverlay {
   group: THREE.Group;
   setPaint: (paint: ScalpPaint | null) => void;
   /** Paint colour: the paint's own override (ScalpPaint.color) or the hair's colour (scalpPaintColor). */
-  setColor: (rootHex: string, baseHex?: string, tipHex?: string) => void;
+  setColor: (rootHex: string, baseHex?: string, tipHex?: string, specHex?: string, specIntensity?: number) => void;
   /** Rebuilds the overlay on new head surfaces (geometries in head-pivot-local space). */
   setSurfaces: (geos: THREE.BufferGeometry[]) => void;
   dispose: () => void;
@@ -124,8 +124,8 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
   });
   let meshes: THREE.Mesh[] = [];
   let current: ScalpPaint | null = null;
-  let hairCol: [string, string | undefined, string | undefined] = ['#2a1e18', undefined, undefined];
-  const applyColor = () => { (mat.uniforms.uColor.value as THREE.Color).copy(scalpPaintColor(current, hairCol[0], hairCol[1], hairCol[2])); };
+  let hairCol: [string, string | undefined, string | undefined, string | undefined, number | undefined] = ['#2a1e18', undefined, undefined, undefined, undefined];
+  const applyColor = () => { (mat.uniforms.uColor.value as THREE.Color).copy(scalpPaintColor(current, hairCol[0], hairCol[1], hairCol[2], hairCol[3], hairCol[4])); };
   return {
     group,
     setPaint(p) {
@@ -144,8 +144,8 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
       mat.uniforms.uGrain.value = p.grain;
       mat.uniforms.uIrreg.value = p.irregularity ?? 0.5;
     },
-    setColor(rootHex, baseHex, tipHex) {
-      hairCol = [rootHex, baseHex, tipHex];
+    setColor(rootHex, baseHex, tipHex, specHex, specIntensity) {
+      hairCol = [rootHex, baseHex, tipHex, specHex, specIntensity];
       applyColor();
     },
     setSurfaces(geos) {

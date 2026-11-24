@@ -148,11 +148,12 @@ export function scalpPaintAlpha(dens: number, grain: number, n01: number): numbe
  * Paint colour: the override if set, else the hair's own colour, the average tone a lock shows along its length
  * (PAINT_MIX and PAINT_SHEEN below; sRGB hex in, colour out). Mirrored in the Unity importer (AetherStrandScalpPaint).
  */
-export function scalpPaintColor(p: Pick<ScalpPaint, 'color'> | null | undefined, rootHex: string, baseHex?: string, tipHex?: string): THREE.Color {
+export function scalpPaintColor(p: Pick<ScalpPaint, 'color'> | null | undefined, rootHex: string, baseHex?: string, tipHex?: string, specHex?: string, specIntensity?: number): THREE.Color {
   if (p?.color && /^#[0-9a-fA-F]{6}$/.test(p.color)) return new THREE.Color(p.color);
   const r = new THREE.Color(rootHex), b = new THREE.Color(baseHex ?? rootHex), t = new THREE.Color(tipHex ?? baseHex ?? rootHex);
   const [wr, wb, wt] = PAINT_MIX, g = PAINT_SHEEN;
-  return new THREE.Color((r.r * wr + b.r * wb + t.r * wt) * g, (r.g * wr + b.g * wb + t.g * wt) * g, (r.b * wr + b.b * wb + t.b * wt) * g);
+  const s = specHex ? new THREE.Color(specHex) : new THREE.Color(0, 0, 0), k = PAINT_SPEC * (specIntensity ?? 0);
+  return new THREE.Color((r.r * wr + b.r * wb + t.r * wt) * g + s.r * k, (r.g * wr + b.g * wb + t.g * wt) * g + s.g * k, (r.b * wr + b.b * wb + t.b * wt) * g + s.b * k);
 }
 
 /**
@@ -165,6 +166,10 @@ export function scalpPaintColor(p: Pick<ScalpPaint, 'color'> | null | undefined,
 // bright as the lit locks above them, so a fade read as a dark band under the hair instead of the same hair cut shorter.
 export const PAINT_MIX: [number, number, number] = [0.05, 0.4, 0.55];
 export const PAINT_SHEEN = 2.0;
+// Plus the primary highlight colour (linear) times its intensity times PAINT_SPEC. On dark hair the lit locks are mostly
+// highlight, not base colour: a black-brown undercut measured hair at sRGB ~48 and its solid painted band at ~13 (a dark
+// rim under the hair) until the highlight was counted in.
+export const PAINT_SPEC = 0.8;
 
 /**
  * Applies the shared hairline look to a paint: softness widens the final falloff (centred on the cut line, so the hairline

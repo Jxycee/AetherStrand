@@ -8,7 +8,7 @@ export interface BustRig {
   rootGroup: THREE.Group;
   headPivot: THREE.Group;
   /** Tints the scalp core and the scalp paint; the paint mixes root and base (baseHex optional). */
-  setRootTint: (hexColor: string, baseHex?: string, tipHex?: string) => void;
+  setRootTint: (hexColor: string, baseHex?: string, tipHex?: string, specHex?: string, specIntensity?: number) => void;
   /** Shows the style's painted short-hair layer on the head (null hides it). */
   setScalpPaint: (paint: ScalpPaint | null) => void;
   /** Replaces the mannequin head, ears, neck and scalp core with a character's fitted head (null restores the mannequin). */
@@ -258,9 +258,9 @@ export function createStylizedBust(): BustRig {
   return {
     rootGroup,
     headPivot,
-    setRootTint: (hexColor: string, baseHex?: string, tipHex?: string) => {
+    setRootTint: (hexColor: string, baseHex?: string, tipHex?: string, specHex?: string, specIntensity?: number) => {
       scalpCoreMat.color.set(hexColor).multiplyScalar(0.55);
-      paintOverlay.setColor(hexColor, baseHex, tipHex);
+      paintOverlay.setColor(hexColor, baseHex, tipHex, specHex, specIntensity);
     },
     setScalpPaint: (paint) => paintOverlay.setPaint(paint),
     setCharacterHead: (head) => {

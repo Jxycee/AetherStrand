@@ -255,6 +255,7 @@ namespace AetherStrand
                 ld.rippleFreq = System.Math.Max(1.0, AetherStrandJson.D(d, "rippleFreq", 9.0));
                 ld.colorFrom = AetherStrandJson.D(d, "colorFrom", double.NaN);
                 ld.colorTo = AetherStrandJson.D(d, "colorTo", double.NaN);
+                ld.surfaceShine = System.Math.Max(0.0, System.Math.Min(1.0, AetherStrandJson.D(d, "surfaceShine", 0.0)));
                 if (AetherStrandJson.Has(d, "rootNormal"))
                 {
                     double[] rn = AetherStrandJson.Arr(d["rootNormal"]);

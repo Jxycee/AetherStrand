@@ -51,6 +51,7 @@ namespace AetherStrand
             public double tipWidth = 0;               // 0..0.9 width/thickness held to the end, rounded cap (locs, blunt cuts)
             public double ripple = 0, rippleFreq = 9; // 0..0.45 periodic width bumps along the lock (locs, rope twists)
             public double colorFrom = double.NaN, colorTo = double.NaN; // part of the root->tip colour gradient shown (NaN: 0..1)
+            public double surfaceShine = 0;           // 0..1 shading tangent flattened onto the scalp, so close-cut locks shine in bands
             public double[] rootNormal = { 0, 1, 0 }; // web head-local
         }
 

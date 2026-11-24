@@ -30,8 +30,10 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 | `scalpColor` | `#rrggbb` | unset | Tint of the painted hair. Unset = the hair's own colour. |
 
 - Default colour (`scalpPaintColor`): 5% root, 40% base, 55% tip, averaged in linear space, times 2.0 for the sheen
-  locks get from the hair shader (a plain average made painted sides read as bare scalp). In Unity, the paint
-  material's `_Color` can be changed by hand afterwards.
+  locks get from the hair shader (a plain average made painted sides read as bare scalp), plus the primary highlight
+  colour times its intensity times 0.8 (`PAINT_SPEC`). On dark hair the lit locks are mostly highlight: without that
+  term a black-brown undercut's solid painted band measured about a quarter as bright as the hair above it and read as a
+  dark rim. In Unity, the paint material's `_Color` can be changed by hand afterwards.
 - Edge coverage (`scalpPaintAlpha`): a soft gradient mixed with fine stipple by `grain`, so it never ends on a hard line.
 - Strand streaks (`paintStreak`): fine noise stretched along the comb direction, so painted sides read as short hairs
   rather than flat colour. In Unity it is the `_Streaks` slider.
@@ -48,8 +50,11 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 The density along a fade is one smooth curve (`paintRamp` in scalpPaint.ts, mirrored in the web overlay shader and the
 Unity ScalpPaint shader and C#): 1 down to the solid side hair, `stubble` at the cut line, 0 at cut line + `feather`. It
 keeps falling through the stubble value. The old two-part curve went flat there, so every fade showed a separate band of
-stubble that read as stacked layers. For a natural fade use a small `stubble` (about 0.3), a wider `feather` (about 0.09)
-and less `grain` (about 0.35): a soft gradient with fine grain, not a stippled band.
+stubble that read as stacked layers. For a natural fade use a small `stubble` (about 0.3), a wide `feather` (about 0.16)
+and little `grain` (about 0.2): a soft gradient with fine grain, not a stippled band or white frost.
+
+`topPhi` caps how far up the fade can reach, but a hairline set higher than it (for example the temple corners of a
+`roundedHairline`) now wins. Before, the cap also pulled the hairline down to `topPhi`, so corner lift did nothing.
 
 Painted short hair now matches the lit locks: the default paint colour is brighter (see Hairline look). At the old
 brightness, painted sides showed as a dark band under the hair wherever the locks thinned.
@@ -73,6 +78,10 @@ values: each build sets them from `config.earLandmarks` (`setEarLandmarks`), or 
   them, which holds for any head. The earlier version misread jaw, mastoid and neck as ear and put Tobin's ear 0.2 rad
   (about 5 cm) too far back, which put sideburns on the ear and opened bald temple corners.
 - To check landmarks by eye, render with `--no-hair --lines th:1.43,th:1.78,ph:1.68,ph:2.16` (see Preview renderer).
+
+Where the front hairline sits matters on a near-vertical forehead like Tobin's. At phi 1.3 the front locks had to climb
+the forehead wall and read as a hanging fringe from every view; at about phi 1.0 the hair starts where the forehead
+curves back and rises from there (undercut-fade uses `roundedHairline(1.02, 0.12, 0.8)`).
 
 `roundedHairline(centre, cornerLift, width)` gives a curved front hairline for the cut line (`hairlinePhi`): highest at
 the temple corners, lowest in the middle of the forehead. Combine it with `templeRecede` for the temple dip of most men's
@@ -109,6 +118,22 @@ shows as dark teeth along the hairline.
   - Every lock lies on one smooth hair surface whose height is set by position on the head, not per lock. Neighbouring
     locks then curve the same way in the same place, so the highlights run as broad bands across the clumps. Per-lock
     height profiles put a highlight dash on every lock.
+  - `spikeHeight` (m, default 0.02): how far a full spike tip leaves the surface. `quiffBack` (0..1, default 0.25): how
+    far back the quiff leans (0 = straight up, 1 = 45 degrees back). Leaning back is what keeps a quiff from reading as
+    a visor or fringe.
+  - `clumpCards` (share of `clumpSpacing`, default 0): one wide pointed card on each clump guide, over the narrow locks,
+    so the top reads as a few chunky game-style clumps. Skipped in the fade band, on the back below the crown and at a
+    visible whorl.
+  - `combDown` (0..1, default 0) with `whorlRadius: 0`: a combed-back crop has no visible whorl, so behind the ears the
+    hair is combed straight down from where the top turns over the crown. Without it, flow away from the front meets
+    again on the back of the head (a starburst), and a crown whorl in front of the back hair either crumples where the
+    two flows meet or parts into a bald spot.
+  - `backSmooth` (0..1, default 1): behind the ears the locks are longer and the under layer is shaded like the outer one,
+    so the back reads as one combed surface instead of shingles with dark gaps.
+  - Near the edge a lock turns to run along it instead of stopping, so locks rooted close to the edge are long enough to
+    keep and the crop's edge has no lone locks on the paint. The fade band thins locks less (squared), for the same reason.
+  - The under layer shows no dark roots: seen through gaps in the outer layer, dark roots read as holes.
+  - `surfaceShine` (default 0.85): see Lock options below.
   - `rigid` (default true): see Rigid locks below.
 - `sideLayerLocks(specs, options)`: two rows of short locks lying on the sides down to a per-azimuth end. Use it only
   when the sides are long enough to need modelled hair; short sides are better painted.
@@ -123,6 +148,15 @@ shows as dark teeth along the hairline.
   shows. A short lock is a piece of longer hair, so it shouldn't get a dark root and a light tip of its own (that dots the
   surface). Unity: read by AetherStrandWebMesh and the URP ForwardLit pass of AetherStrand_Hair.shader; the Built-in
   pass and the legacy Editor mesh generator still use the full gradient.
+
+- `surfaceShine` (0..1, LockBuildSpec, exported per lock): highlights follow the hair surface over the scalp instead of
+  each lock's own rise off it. The shading tangent loses its component along the head normal (by this much), so
+  neighbouring locks shine together in broad bands instead of every short lock catching the light at its own bend and
+  dotting the top with flecks. Only the highlight changes, never the shape. Unity: `LockData.surfaceShine`, applied to
+  the mesh tangents in AetherStrandWebMesh.
+- Dark hair: hex colours are taken as linear, so pick very dark values (undercut-fade: root `#0e0a07`, base `#1c140f`,
+  tip `#271d16`) and a muted highlight colour (`#6e6258`, intensity about 0.17). A near-black base with strong highlights
+  turns every lock that misses the highlight into a black streak; a bright highlight colour turns the whole head tan.
 
 ## Head conform (character skulls)
 
@@ -152,9 +186,13 @@ the port should keep the same two-way rule.
 | `--grid` | Draw the scalp coordinate grid on the head: blue lines of \|azimuth\|, red lines of phi, every 0.1 rad. |
 | `--lines th:1.43,ph:1.68,...` | Draw only these scalp lines (theta = \|azimuth\|, ph = phi), coloured blue, cyan, red, orange, green, yellow, magenta, white in order. Use it to place landmarks and cut lines on a head. |
 
+The JSON line the preview prints is `hair.auditQuality` (coverage, floating roots, penetration, crown hooks, clipping,
+score, verdict). Crown hooks skip rigid locks, whose rise off the scalp is built in, not the solver hooking a strand up.
+
 The preview draws a stand-in for the viewport hair shader on lock cards: about 18 strands across each card, frayed tips
 past 55% of the length and darker grooves between strands. Colours are taken as linear (as three.js does), so dark hair
 renders at the same brightness as in the app.
 Colour and highlights follow the web hair shader: root colour blended by `scalpRoot`, the gradient taken over
 `colorRange`, and the same specular lobes (tilted toward the head normal and masked near the root), so speckle seen in
-the preview is in the app too.
+the preview is in the app too. Diffuse light also uses the normal blended 42% toward the head normal, as the app does;
+with the raw card normal, cards seen edge-on showed as black leaves the app never draws.

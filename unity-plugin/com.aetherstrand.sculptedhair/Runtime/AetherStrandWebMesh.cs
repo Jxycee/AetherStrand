@@ -238,6 +238,15 @@ namespace AetherStrand
                     double hl = System.Math.Sqrt(hnx * hnx + hny * hny + hnz * hnz);
                     double hnInv = 1.0 / (hl == 0 ? 1.0 : hl);
                     hnx *= hnInv; hny *= hnInv; hnz *= hnInv;
+                    // shading tangent (surfaceShine): the lock's direction along the scalp, its rise off the skin removed
+                    double stx = tx, sty = ty, stz = tz;
+                    if (lk.surfaceShine > 0)
+                    {
+                        double tn = (tx * hnx + ty * hny + tz * hnz) * lk.surfaceShine;
+                        stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
+                        double sl = System.Math.Sqrt(stx * stx + sty * sty + stz * stz);
+                        if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
+                    }
 
                     double sx, sy, sz;
                     if (!lockNormal)
@@ -280,7 +289,7 @@ namespace AetherStrand
                         verts[vIdx] = MapPoint(vx, vy, vz);
                         double nx = sx * PNX[r] + ox * PNY[r], ny = sy * PNX[r] + oy * PNY[r], nz = sz * PNX[r] + oz * PNY[r];
                         norms[vIdx] = MapDir(nx, ny, nz, 0);
-                        { Vector3 tv = MapDir(tx, ty, tz, 1); tans[vIdx] = new Vector4(tv.x, tv.y, tv.z, 1f); }
+                        { Vector3 tv = MapDir(stx, sty, stz, 1); tans[vIdx] = new Vector4(tv.x, tv.y, tv.z, 1f); }
                         vIdx++;
                     }
                 }
@@ -290,6 +299,16 @@ namespace AetherStrand
                 double tl2 = System.Math.Sqrt(ttx * ttx + tty * tty + ttz * ttz);
                 double ttInv = 1.0 / (tl2 == 0 ? 1.0 : tl2);
                 ttx *= ttInv; tty *= ttInv; ttz *= ttInv;
+                if (lk.surfaceShine > 0)
+                {
+                    double thx = X[ti] - hcx, thy = Y[ti] - hcy, thz = Z[ti] - hcz;
+                    double thl = System.Math.Sqrt(thx * thx + thy * thy + thz * thz);
+                    if (thl > 0) { thx /= thl; thy /= thl; thz /= thl; }
+                    double tn = (ttx * thx + tty * thy + ttz * thz) * lk.surfaceShine;
+                    double fx = ttx - thx * tn, fy = tty - thy * tn, fz = ttz - thz * tn;
+                    double fl = System.Math.Sqrt(fx * fx + fy * fy + fz * fz);
+                    if (fl > 1e-4) { ttx = fx / fl; tty = fy / fl; ttz = fz / fl; }
+                }
                 verts[vIdx] = MapPoint(X[ti], Y[ti], Z[ti]);
                 norms[vIdx] = MapDir(ox, oy, oz, 0);
                 { Vector3 tv2 = MapDir(ttx, tty, ttz, 1); tans[vIdx] = new Vector4(tv2.x, tv2.y, tv2.z, 1f); }

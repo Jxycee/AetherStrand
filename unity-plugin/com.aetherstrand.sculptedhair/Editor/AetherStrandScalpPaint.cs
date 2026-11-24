@@ -140,7 +140,8 @@ namespace AetherStrand.Editor
 
         /// <summary>
         /// Paint colour: the paint's own override (scalpPaint.color, set by the style or by hand) or the hair's own colour,
-        /// 5% root, 40% base, 55% tip averaged in linear space, times 2.0 to stand in for the sheen the hair shader adds
+        /// 5% root, 40% base, 55% tip averaged in linear space, times 2.0, plus the primary highlight colour times 0.8 times its
+        /// intensity, to stand in for the sheen the hair shader adds
         /// (so painted sides match the lit locks instead of reading as bare scalp). Mirrors scalpPaintColor / PAINT_MIX /
         /// PAINT_SHEEN in src/engine/scalpPaint.ts. Change the material's _Color afterwards to tint the hairline by hand.
         /// </summary>
@@ -152,6 +153,9 @@ namespace AetherStrand.Editor
             Color mid = hairMaterial != null && hairMaterial.HasProperty("_BaseColor") ? hairMaterial.GetColor("_BaseColor") : root;
             Color tip = hairMaterial != null && hairMaterial.HasProperty("_TipColor") ? hairMaterial.GetColor("_TipColor") : mid;
             Color lin = (root.linear * 0.05f + mid.linear * 0.4f + tip.linear * 0.55f) * 2.0f;
+            // plus the primary highlight (PAINT_SPEC 0.8): on dark hair the lit locks are mostly highlight
+            if (hairMaterial != null && hairMaterial.HasProperty("_PrimarySpecColor") && hairMaterial.HasProperty("_PrimaryIntensity"))
+                lin += hairMaterial.GetColor("_PrimarySpecColor").linear * (0.8f * hairMaterial.GetFloat("_PrimaryIntensity"));
             c = lin.gamma; c.a = 1f;
             return c;
         }

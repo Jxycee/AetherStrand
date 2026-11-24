@@ -485,7 +485,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     if (hairMatRef.current) {
       syncHairShaderUniforms(hairMatRef.current, shaderConfig, lightingPreset, visionMode);
     }
-    bustRigRef.current?.setRootTint(shaderConfig.rootColor, shaderConfig.baseColor, shaderConfig.tipColor);
+    bustRigRef.current?.setRootTint(shaderConfig.rootColor, shaderConfig.baseColor, shaderConfig.tipColor, shaderConfig.primarySpecColor, shaderConfig.primaryIntensity);
 
     const objs = sceneObjectsRef.current;
     if (objs) {
@@ -613,7 +613,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     renderRigRef.current = { renderer, scene, camera, controls, isSoftwareGl };
 
     const bust = createStylizedBust();
-    bust.setRootTint(shaderRef.current.rootColor, shaderRef.current.baseColor, shaderRef.current.tipColor);
+    bust.setRootTint(shaderRef.current.rootColor, shaderRef.current.baseColor, shaderRef.current.tipColor, shaderRef.current.primarySpecColor, shaderRef.current.primaryIntensity);
     if (characterHead) bust.setCharacterHead(characterHead);
     scene.add(bust.rootGroup);
     bustRigRef.current = bust;

@@ -131,7 +131,7 @@ const LINE_COLS = [[0.1, 0.3, 1], [0, 0.9, 0.9], [1, 0.1, 0.1], [1, 0.55, 0], [0
 const gridLines = (arg('--lines') ?? '').split(',').filter(Boolean).map((t, i) => ({ th: t.startsWith('th'), v: Number(t.split(':')[1]), c: LINE_COLS[i % LINE_COLS.length] }));
 const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
 // painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
-const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40');
+const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40', sh.primarySpecColor, sh.primaryIntensity ?? 0.32);
 const grainAt = (az: number, phi: number) => {
   const a = Math.floor(az / 0.011), b = Math.floor(phi / 0.011);
   const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
@@ -318,9 +318,11 @@ function renderView(vi: number) {
     const base = gt < 0.28 ? effRoot.lerp(cBase, sstep(0, 0.28, gt)) : cBase.clone().lerp(cTip, sstep(0.28, 1, gt));
     const isShell = card[i] === 0;
     const aoK = (isShell ? 0.55 : 0.62 + 0.38 * ao[i]) * (0.72 + 0.28 * a);
-    const diff = 0.34 + 0.58 * Math.max(0, (N.dot(key) + 0.25) / 1.25) + 0.16 * Math.max(0, N.dot(fill));
     HN.set(headNA[i * 3], headNA[i * 3 + 1], headNA[i * 3 + 2]).normalize();
     BN.copy(N).lerp(HN, 0.42).normalize();
+    // diffuse on the normal blended toward the head normal, as hairShaders.ts lights it (perturbedN from baseN): the raw
+    // card normal made every card seen edge-on or from below a near-black leaf the app never shows
+    const diff = 0.34 + 0.58 * Math.max(0, (BN.dot(key) + 0.25) / 1.25) + 0.16 * Math.max(0, BN.dot(fill));
     const keyFacing = sstepK(-0.14, 0.48, BN.dot(key));
     const specMask = sstepK(0.08, 0.24, t) * (0.62 + 0.38 * ao[i]);
     const lobe = (shift: number, pw: number) => { const th = T.clone().addScaledVector(BN, shift).normalize().dot(Hh); return Math.pow(Math.sqrt(Math.max(0, 1 - th * th)), pw); };
