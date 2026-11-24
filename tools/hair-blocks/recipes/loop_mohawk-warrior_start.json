@@ -1,0 +1,52 @@
+{
+ "schemaVersion": "2.0",
+ "presetId": "noctis",
+ "customName": "Mohawk Warrior",
+ "builder": {
+  "archetype": "mohawk-warrior",
+  "partPosition": 0,
+  "bangsLength": 0.33,
+  "bangsSweep": 0,
+  "crownVolume": 0.77,
+  "spikeLift": 0.65,
+  "sideLength": 0.11,
+  "backLength": 0.48,
+  "layerShag": 0.6,
+  "density": 1.13,
+  "strandWidth": 0.95,
+  "seed": 4103
+ },
+ "shader": {
+  "rootColor": "#131316",
+  "baseColor": "#1d1d22",
+  "tipColor": "#34343c",
+  "primarySpecColor": "#f2e6cf",
+  "secondarySpecColor": "#b08c54",
+  "primaryShift": 0.08,
+  "primaryPower": 84,
+  "primaryIntensity": 0.38,
+  "secondaryShift": -0.15,
+  "secondaryPower": 28,
+  "secondaryIntensity": 0.22,
+  "rimIntensity": 0.4,
+  "rimPower": 2.9,
+  "rootAO": 0.54,
+  "grooveDepth": 0.68,
+  "strandVariation": 0.24
+ },
+ "physics": {
+  "stiffness": 0.6,
+  "gravity": 4.6,
+  "windStrength": 0.48,
+  "windTurbulence": 0.16,
+  "windAzimuth": 300,
+  "damping": 0.12,
+  "inertia": 0.85,
+  "bendingSmoothness": 0.52,
+  "collisionMarginMm": 9,
+  "rootAnchor": 0.64,
+  "solverSubsteps": 1,
+  "strandWidthScale": 1,
+  "collisionEnabled": true
+ }
+}
