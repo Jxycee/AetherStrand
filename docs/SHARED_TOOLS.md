@@ -51,6 +51,13 @@ instead of modelling fade-cap locks.
 - `texturedTopLocks(specs, options)`: short, pointed clumps growing from a crown whorl and flowing forward, with lift and
   spikes (crop, undercut and fade tops). Option `quiff` (0..1): front clumps keep their height where the forehead drops
   away, so the front stands up rather than out. Clumps flowing back or sideways settle onto the skull toward their tips.
+  - `endPhi(az)`: drape line. Clumps flowing back or sideways follow the skull past the dome edge and lie down over the
+    sides and back to this line, so the top layers into painted sides instead of sitting on them as a cap. The march runs
+    on the scalp ellipsoid, so a flow pointing out past the dome edge turns down the head by itself.
+  - `hairlineRow(az)`: a row of short locks rooted along the front hairline, rising off the skin in tufts with their tips
+    leaning forward. Use it when the top's front edge would otherwise leave a bare painted strip.
+  - `whorlCap` (default 1): a small flat swirl of short locks over the crown whorl, so the crown never opens into a bald spot.
+  - Clumps cut shorter than about 4 cm are dropped, because a clump shorter than it is wide renders as a curled blob.
 - `sideLayerLocks(specs, options)`: two rows of short locks lying on the sides down to a per-azimuth end. Use it only
   when the sides are long enough to need modelled hair; short sides are better painted.
 
@@ -60,7 +67,10 @@ instead of modelling fade-cap locks.
 
 A character's skull is rarely the web ellipsoid (Tobin's is up to 9% bigger at the forehead), so close-lying hair would
 sink into the head. The conform map stores, per azimuth and phi, how far the skull pokes past the ellipsoid, and pushes
-rest positions out by that much (outward only). Not yet ported to the Unity plugin.
+rest positions by that much. Locks that stay on the scalp move out or in (Tobin's occiput is 2 to 8% inside the
+ellipsoid, so back hair would otherwise float); locks that hang past the hairline only move out. While a head is loaded
+the web head collider uses the same skull over the scalp (`headConformClearance`). Not yet ported to the Unity plugin;
+the port should keep the same two-way rule.
 
 ## Preview renderer (for humans and AI)
 

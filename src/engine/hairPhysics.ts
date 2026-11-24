@@ -11,7 +11,10 @@ import {
 } from '../types/hair';
 import { buildCustomHairSpecs, LockBuildSpec, naturalMaxHairlinePhi, scalpPaintForConfig } from './hairBuilder';
 import { deriveScalpPaint, evalScalpPaint, scalpAngles, type ScalpPaint } from './scalpPaint';
-import { conformPoint, type HeadConformMap } from './characterHead';
+import { conformPoint, headConformClearance, isBelowHairlineCap, type HeadConformMap } from './characterHead';
+
+// skull of the loaded character head (conformToHead); when set, head collisions use it instead of the mannequin skull
+let _activeConform: HeadConformMap | null = null;
 
 export interface SphereColliderDef {
   localCenter: THREE.Vector3;
@@ -416,6 +419,10 @@ function computeHeadClearanceMeters(
 ): number {
   _vLocal.copy(worldPos).sub(headPos).applyQuaternion(invHeadQuat);
   const y = _vLocal.y;
+  if (_activeConform) {
+    const c = headConformClearance(_activeConform, _vLocal, (az) => naturalMaxHairlinePhi(az) + 0.1);
+    if (c !== null) return c;
+  }
 
   // 1. Signed radial distance from the smooth upper skull ellipsoid (bustModel.ts inner scalp + cranium)
   const sRx = 0.275;
@@ -3569,17 +3576,23 @@ export class HairPhysicsSystem {
   }
 
   /**
-   * Fits the built hair to a character's real skull (see characterHead.ts conformPoint): every rest node is pushed outward
-   * by how far the skull stands out from the web scalp ellipsoid there. Call after a load; pass null to undo. Call
+   * Fits the built hair to a character's real skull (see characterHead.ts conformPoint): every rest node moves out or in
+   * by how far the skull stands out from (or sits inside) the web scalp ellipsoid there, and head collisions use that skull. Call after a load; pass null to undo. Call
    * snapToHead afterwards to refresh positions and the mesh.
    */
   public conformToHead(map: HeadConformMap | null): void {
+    _activeConform = map;
     for (const lock of this.locks) {
-      for (const pt of lock.particles as any[]) {
+      const ps = lock.particles as any[];
+      for (const pt of ps) {
         if (!pt.builtRest) pt.builtRest = pt.restLocal.clone();
         pt.restLocal.copy(pt.builtRest);
-        if (map) conformPoint(map, pt.restLocal, naturalMaxHairlinePhi);
       }
+      if (!map) continue;
+      // short hair that stays on the scalp follows the real skull both ways; a lock that hangs past the hairline only
+      // moves out, so its lower part stays clear of the mannequin neck and face collider
+      const hangs = ps.some((pt) => isBelowHairlineCap(pt.restLocal, naturalMaxHairlinePhi));
+      for (const pt of ps) conformPoint(map, pt.restLocal, naturalMaxHairlinePhi, !hangs);
     }
   }
 

@@ -189,8 +189,10 @@ export function loadCharacterHead(objText: string, name = 'character', chinY?: n
 // The builder lays hair on the web scalp ellipsoid. A character's skull bulges past it in places (Tobin: up to 9% at the
 // forehead, 2-7% over the upper sides) so hair lying close to the scalp ends up inside the head, and dips inside it elsewhere.
 // The conform map stores, per scalp direction, how far the real skull stands out from the ellipsoid (in ellipsoid radius
-// units); conformPoint pushes a hair node outward by that amount, so every lock keeps its height above the real skull.
-// Outward only: where the skull is smaller than the ellipsoid the hair is left as built (the collider owns that case).
+// units, negative where the skull is smaller); conformPoint moves a hair node out or in by that amount, so every lock keeps
+// its height above the real skull. Without the inward move, hair at the back of a skull that is flatter than the
+// ellipsoid floats off the head (Tobin: 2-8% smaller over the occiput). headConformClearance gives the physics the same
+// skull, so the simulation doesn't push the hair back out to the mannequin.
 
 export const CONFORM_AZ_BINS = 72;
 export const CONFORM_PHI_BINS = 48;
@@ -200,7 +202,7 @@ export interface HeadConformMap {
   azBins: number;
   phiBins: number;
   phiMax: number;
-  /** excess[a * phiBins + p] = skull radius / ellipsoid radius - 1, >= 0 */
+  /** excess[a * phiBins + p] = skull radius / ellipsoid radius - 1 (negative where the skull is inside the ellipsoid) */
   excess: Float32Array;
 }
 
@@ -253,10 +255,10 @@ export function buildHeadConformMap(pts: Float32Array): HeadConformMap {
     }
     cur = nx;
   }
-  return { azBins: A, phiBins: P, phiMax: PM, excess: cur.map((v) => Math.max(0, Math.min(0.2, v))) };
+  return { azBins: A, phiBins: P, phiMax: PM, excess: cur.map((v) => Math.max(-0.12, Math.min(0.2, v))) };
 }
 
-/** Skull excess (ellipsoid radius units, >= 0) at signed azimuth az and polar angle phi (bilinear, azimuth wraps). */
+/** Skull excess (ellipsoid radius units, signed) at signed azimuth az and polar angle phi (bilinear, azimuth wraps). */
 export function sampleHeadConform(m: HeadConformMap, az: number, phi: number): number {
   const fa = ((az + Math.PI) / (Math.PI * 2)) * m.azBins - 0.5;
   const fp = Math.max(0, Math.min(m.phiBins - 1, (phi / m.phiMax) * m.phiBins - 0.5));
@@ -266,15 +268,35 @@ export function sampleHeadConform(m: HeadConformMap, az: number, phi: number): n
 }
 
 /**
- * Pushes a hair node (web head-pivot space, in place) outward by the skull excess. Nodes below the hairline cap (hair hanging
+ * Moves a hair node (web head-pivot space, in place) out or in by the skull excess. Nodes below the hairline cap (hair hanging
  * past the scalp: bangs, long hair, ponytails) take the excess at the cap, so a lock moves as one piece and never follows
- * the face or neck. capPhi(az) is the lowest hairline (hairBuilder.naturalMaxHairlinePhi).
+ * the face or neck. capPhi(az) is the lowest hairline (hairBuilder.naturalMaxHairlinePhi). allowInward = false keeps the
+ * old outward-only fit (used for locks that hang past the scalp, whose lower part the mannequin collider still owns).
  */
-export function conformPoint(m: HeadConformMap, p: THREE.Vector3, capPhi: (az: number) => number): void {
+export function conformPoint(m: HeadConformMap, p: THREE.Vector3, capPhi: (az: number) => number, allowInward = true): void {
   const s = _sa(p.x, p.y, p.z);
   if (s.r < 1e-6) return;
-  const ex = sampleHeadConform(m, s.az, Math.min(s.phi, capPhi(s.az)));
-  if (ex <= 0) return;
+  let ex = sampleHeadConform(m, s.az, Math.min(s.phi, capPhi(s.az)));
+  if (!allowInward) ex = Math.max(0, ex);
+  if (Math.abs(ex) < 1e-5) return;
   const k = (s.r + ex) / s.r;
   p.set(HC.x + (p.x - HC.x) * k, HC.y + (p.y - HC.y) * k, HC.z + (p.z - HC.z) * k);
+}
+
+/** True when a node (web head-pivot space) lies below the hairline cap: the lock hangs past the scalp. */
+export function isBelowHairlineCap(p: THREE.Vector3, capPhi: (az: number) => number): boolean {
+  const s = _sa(p.x, p.y, p.z);
+  return s.phi > capPhi(s.az);
+}
+
+/**
+ * Signed clearance (metres, negative = inside) of a point in web head-pivot space above the character's skull as the
+ * conform map sees it, or null below the scalp (maxPhi, e.g. the lowest hairline + a margin), where the mannequin
+ * collider still applies.
+ */
+export function headConformClearance(m: HeadConformMap, p: THREE.Vector3, maxPhi?: (az: number) => number): number | null {
+  const s = _sa(p.x, p.y, p.z);
+  // only over the scalp: lower down (ears, jaw, neck) the map is too coarse to collide against
+  if (s.phi > Math.min(m.phiMax - 0.1, maxPhi ? maxPhi(s.az) : Infinity)) return null;
+  return (s.r - (1 + sampleHeadConform(m, s.az, s.phi))) * 0.295;
 }
