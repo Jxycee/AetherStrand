@@ -1,5 +1,5 @@
 # Regenerates all physics traces under <scratch>/ptraces (web ground truth). Run from anywhere.
-$W = '<game-repo>/.claude/worktrees/agent-a419013169f3039d6'
+$W = (Get-Location).Path
 $T = "$W/Reference/sessions/aetherstrand-combo/tools/web_trace.ts"
 $rec = @{ halfup059 = "$W/Reference/sessions/aetherstrand-combo/recipes/halfup059.json" }
 foreach ($a in 'asym-cascade','spiky-hero','high-ponytail','sleek-bob','long-cascade','twin-tails') { $rec[$a] = "<scratch>/batch/$a/recipe.json" }

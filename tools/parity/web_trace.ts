@@ -1,6 +1,6 @@
 // Headless AetherStrand web-solver trace writer (ground truth for the C# port).
 //
-//   cd C:/Dev/scratch/AetherStrand
+//   cd <repo root>
 //   npx tsx <this file> <recipe.json> <outDir> <mode> [frames=300] [--set key=value,key=value] [--nocollide]
 //
 // mode: idle | walk | turn | gust | rest   (rest = head fixed at the neutral pose, no motion)
@@ -24,8 +24,8 @@
 //               strict C# test, and PresetGeometry.json (live-system rest pose, plugin format + optional solver extras).
 import fs from 'node:fs';
 import path from 'node:path';
-import * as THREE from 'C:/Dev/scratch/AetherStrand/node_modules/three/build/three.module.js';
-import { HairPhysicsSystem } from 'C:/Dev/scratch/AetherStrand/src/engine/hairPhysics';
+import * as THREE from 'three';
+import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 
 const argv = process.argv.slice(2);
 const flags: Record<string, string> = {};

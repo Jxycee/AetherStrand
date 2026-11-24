@@ -4,7 +4,7 @@ from PIL import Image
 
 web = Image.open(sys.argv[1]).convert('RGB')
 uni = Image.open(sys.argv[2]).convert('RGB')
-out = sys.argv[3] if len(sys.argv) > 3 else 'C:/Dev/scratch/cmp_out.png'
+out = sys.argv[3] if len(sys.argv) > 3 else './out/cmp_out.png'
 
 
 def hair(a):

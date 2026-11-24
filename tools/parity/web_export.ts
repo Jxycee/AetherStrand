@@ -3,7 +3,7 @@
 // Writes PresetGeometry.json (plugin format) for ANY recipe (builder + presetId + physics).
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildExportLocksForBlender } from 'C:/Dev/scratch/AetherStrand/src/engine/hairPhysics';
+import { buildExportLocksForBlender } from '../../src/engine/hairPhysics';
 const [recipePath, out = '.'] = process.argv.slice(2);
 const r: any = JSON.parse(fs.readFileSync(recipePath, 'utf8'));
 const locks = buildExportLocksForBlender(r.presetId, r.builder ?? null, r.physics?.strandWidthScale ?? 1);

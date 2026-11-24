@@ -1,7 +1,7 @@
 // Shared: full-precision PresetGeometry (schema 2.1, plugin format + solver extras) from the LIVE web HairPhysicsSystem.
 // Mirrors HairPhysicsSystem.loadCustomBuilder (collision-free bake included), so it equals what the web viewport renders and simulates.
-import * as THREE from 'C:/Dev/scratch/AetherStrand/node_modules/three/build/three.module.js';
-import { HairPhysicsSystem } from 'C:/Dev/scratch/AetherStrand/src/engine/hairPhysics';
+import * as THREE from 'three';
+import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 
 export function exportGeometry(recipe: any): any {
   const hair: any = new HairPhysicsSystem(new THREE.ShaderMaterial(), recipe.presetId);

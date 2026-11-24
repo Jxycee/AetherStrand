@@ -13,8 +13,8 @@ def fg(a):
 rows = []
 sheet = Image.new('RGB', (2 * 3 * 340, 4 * 340 + 0), (20, 20, 20))
 for n, a in enumerate(archs):
-    w = Image.open('C:/Dev/scratch/web_out/batch_%s_web.png' % a).convert('RGB')
-    u = Image.open('C:/Dev/scratch/parity_out/batch_%s_4view.png' % a).convert('RGB')
+    w = Image.open('./out/web_out/batch_%s_web.png' % a).convert('RGB')
+    u = Image.open('./out/parity_out/batch_%s_4view.png' % a).convert('RGB')
     ious, maes = [], []
     for (x, y) in [(0, 0), (512, 0), (0, 512), (512, 512)]:
         aw = np.array(w.crop((x, y, x + 512, y + 512))).astype(float)
@@ -33,4 +33,4 @@ for n, a in enumerate(archs):
     sheet.paste(w.crop((512, 512, 1024, 1024)).resize((170, 170)), (cx + 340, cy + 170))
     sheet.paste(u.crop((512, 512, 1024, 1024)).resize((170, 170)), (cx + 510, cy + 170))
     ImageDraw.Draw(sheet).text((cx + 4, cy + 4), a, fill=(255, 255, 255))
-sheet.save('C:/Dev/scratch/batch_sheet.png')
+sheet.save('./out/batch_sheet.png')

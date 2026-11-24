@@ -2,10 +2,10 @@
 // Run with cwd = AetherStrand clone:  npx tsx gen_recipes.ts <outDir>
 import fs from 'node:fs';
 import path from 'node:path';
-import { ALL_ARCHETYPES, generateRandomHairstyle } from 'C:/Dev/scratch/AetherStrand/src/engine/hairBuilder';
-import { buildExportLocksForBlender } from 'C:/Dev/scratch/AetherStrand/src/engine/hairPhysics';
+import { ALL_ARCHETYPES, generateRandomHairstyle } from '../../src/engine/hairBuilder';
+import { buildExportLocksForBlender } from '../../src/engine/hairPhysics';
 
-const out = process.argv[2] ?? 'C:/Dev/scratch/batch';
+const out = process.argv[2] ?? './out/batch';
 fs.mkdirSync(out, { recursive: true });
 const index: any[] = [];
 ALL_ARCHETYPES.forEach((arch: string, i: number) => {
