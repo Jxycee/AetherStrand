@@ -200,11 +200,12 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     // Mode 1: isFadeCap stubble (vCardMask ~0.25): stochastic stipple dissolves toward the hairline
     if (vCardMask > 0.15 && vCardMask < 0.45) {
-      float fadeCov = pow(1.0 - smoothstep(0.25, 1.0, t), 0.75);
+      float fadeStart0 = abs(vCardMask - 0.25) < 0.002 ? 0.25 : clamp((vCardMask - 0.16) / 0.28, 0.0, 1.0);
+      float fadeCov = pow(1.0 - smoothstep(fadeStart0, 1.0, t), 0.75);
       vec2 fadeCell = floor(vec2(vUv.x * 42.0 + floor(vStrandSeed * 255.0) / 255.0 * 17.0, t * 28.0));
       float fadeNoise = fract(sin(dot(fadeCell, vec2(127.1, 311.7))) * 43758.5453);
       float fadeIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-      if (fadeCov - mix(fadeNoise, fadeIgn, 0.55) < 0.0) discard;
+      if (fadeCov - mix(fadeNoise, fadeIgn, 0.86) < 0.0) discard;
     }
 
     // Fine realistic multi-filament UVs scaled for slender sculpted 3D locks

@@ -52,6 +52,7 @@ interface VolumetricHairLock {
   layerOrder: number;
   isBaseShell: boolean;
   isFadeCap?: boolean;
+  fadeStart?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -2416,6 +2417,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       layerOrder: sp.layerOrder,
       isBaseShell: Boolean(sp.isBaseShell),
       isFadeCap: Boolean((sp as any).isFadeCap),
+      fadeStart: (sp as any).fadeStart,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -3386,7 +3388,7 @@ export class HairPhysicsSystem {
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
       const baseVertex = s * vertsPerLock;
-      const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? 0.25 : 1.0;
+      const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : 1.0;
 
       for (let k = 0; k < ringsPerLock; k++) {
         const vCoord = k / (NODES_PER_LOCK - 1);
