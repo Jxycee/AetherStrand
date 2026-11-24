@@ -41,7 +41,10 @@ export type HairBuilderArchetype =
   | 'samurai-topknot'
   | 'braided-crown'
   | 'wavy-bard'
-  | 'undercut-fade';
+  | 'undercut-fade'
+  | 'curtain-part'
+  | 'rope-locs'
+  | 'coily-afro';
 
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;

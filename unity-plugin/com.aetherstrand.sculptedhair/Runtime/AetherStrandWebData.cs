@@ -132,6 +132,10 @@ namespace AetherStrand
                 ld.fadeStart = AetherStrandJson.D(d, "fadeStart", double.NaN);
                 ld.smooth = System.Math.Max(1, System.Math.Min(4, (int)System.Math.Round(AetherStrandJson.D(d, "smooth", 1.0))));
                 ld.roundness = System.Math.Max(0.0, System.Math.Min(1.0, AetherStrandJson.D(d, "roundness", 0.0)));
+                ld.tipStart = AetherStrandJson.D(d, "tipStart", double.NaN);
+                ld.tipWidth = System.Math.Max(0.0, System.Math.Min(0.9, AetherStrandJson.D(d, "tipWidth", 0.0)));
+                ld.ripple = System.Math.Max(0.0, System.Math.Min(0.45, AetherStrandJson.D(d, "ripple", 0.0)));
+                ld.rippleFreq = System.Math.Max(1.0, AetherStrandJson.D(d, "rippleFreq", 9.0));
                 if (AetherStrandJson.Has(d, "rootNormal"))
                 {
                     double[] rn = AetherStrandJson.Arr(d["rootNormal"]);

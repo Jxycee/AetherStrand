@@ -57,6 +57,14 @@ interface VolumetricHairLock {
   smooth?: number;
   /** Optional 0..1: blends ribbon thickness toward its width (tube-like cross-section). 0/undefined = legacy. */
   roundness?: number;
+  /** Optional 0.2..0.97: where the end taper starts along the lock (default 0.44 = legacy). Mesh-only. */
+  tipStart?: number;
+  /** Optional 0..0.9: share of width and thickness held through the end, closed by a short rounded cap (locs, blunt cuts). 0/undefined = legacy pointed tip. Mesh-only. */
+  tipWidth?: number;
+  /** Optional 0..0.45: periodic width/thickness bumps along the lock (locs, rope twists, braid sections). Mesh-only. */
+  ripple?: number;
+  /** Bumps along the lock length for ripple (default 9; needs smooth 3-4 to resolve). */
+  rippleFreq?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -251,6 +259,42 @@ function sampleRibbonTables(t: number): void {
   const bt = t < 0.42 ? 1.0 - t * 0.16 : Math.pow((1.0 - t) / 0.58, 1.12) * 0.933;
   _smTab.baseTipTaper = Math.max(0.04, bt);
   _smTab.thickPow = Math.pow(Math.max(0.04, 1.0 - t), 0.86);
+}
+
+/**
+ * Per-lock tip shape (mesh only; solver and collision keep the legacy taper). Also honoured on base shells, where
+ * a blunt edge (tipWidth) keeps the shell full-width down to its cut line instead of thinning into a comb.
+ * tipStart moves where the end taper begins; tipWidth keeps a share of width and thickness to the end
+ * and closes it with a short rounded cap, for locs, blunt cuts and braids' ends. Mirrored in
+ * AetherStrandWebMesh.cs (Unity) so web and plugin meshes match.
+ */
+export const _tipOut = { w: 1, t: 1 };
+export function computeTipShape(t: number, tipStart: number | undefined, tipWidth: number | undefined, ripple?: number, rippleFreq?: number): void {
+  const s = Math.min(0.97, Math.max(0.2, tipStart ?? 0.44));
+  const tw = Math.min(0.9, Math.max(0, tipWidth ?? 0));
+  // the last ring sits on node N-2 (the tip vertex closes the lock at node N-1), so shape over rings 0..N-2
+  t = Math.min(1, t * (NODES_PER_LOCK - 1) / (NODES_PER_LOCK - 2));
+  const u = t < s ? t * 0.44 / s : 0.44 + ((t - s) / (1 - s)) * 0.56;
+  let w = Math.max(0.06, u < 0.44 ? 1.0 - u * 0.14 : Math.pow((1.0 - u) / 0.56, 0.94) * 0.938);
+  let th = Math.pow(Math.max(0.04, 1.0 - u), 0.86);
+  if (tw > 0) {
+    w = tw + (1 - tw) * w;
+    th = tw + (1 - tw) * th;
+    const cap = 0.07;
+    if (t > 1 - cap) {
+      const c = (t - (1 - cap)) / cap;
+      const f = 0.55 + 0.45 * Math.sqrt(Math.max(0, 1 - c * c));
+      w *= f; th *= f;
+    }
+  }
+  const rp = Math.min(0.45, Math.max(0, ripple ?? 0));
+  if (rp > 0) {
+    const fq = Math.max(1, rippleFreq ?? 9);
+    const rootFade = Math.min(1, Math.max(0, (t - 0.04) / 0.11));
+    const m = 1 - rp * 0.5 * (1 - Math.cos(2 * Math.PI * fq * t)) * rootFade * rootFade * (3 - 2 * rootFade);
+    w *= m; th *= m;
+  }
+  _tipOut.w = w; _tipOut.t = th;
 }
 
 /**
@@ -2451,6 +2495,10 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       fadeStart: (sp as any).fadeStart,
       smooth: (sp as any).smooth,
       roundness: (sp as any).roundness,
+      tipStart: (sp as any).tipStart,
+      tipWidth: (sp as any).tipWidth,
+      ripple: (sp as any).ripple,
+      rippleFreq: (sp as any).rippleFreq,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -5219,11 +5267,13 @@ export class HairPhysicsSystem {
         const rootTuck = isBase ? 0.88 + 0.12 * rSin : rootMinW + (1.0 - rootMinW) * rSin;
         const rootThickTuck = isBase ? 1.0 : 0.2 + 0.8 * rSin;
         const isFade = lock.isFadeCap === true;
-        const tipTaper = isFade ? 1.0 : (isBase ? (sm > 1 ? _smTab.baseTipTaper : _NODE_BASE_TIP_TAPER[k]) : (sm > 1 ? _smTab.tipTaper : _NODE_TIP_TAPER[k]));
+        const customTip = !isFade && (lock.tipWidth !== undefined || lock.tipStart !== undefined || (lock.ripple ?? 0) > 0);
+        if (customTip) computeTipShape(sm > 1 ? _smTab.tipFactor : _NODE_TIP_FACTOR[k], lock.tipStart, lock.tipWidth, lock.ripple, lock.rippleFreq);
+        const tipTaper = isFade ? 1.0 : (customTip ? _tipOut.w : (isBase ? (sm > 1 ? _smTab.baseTipTaper : _NODE_BASE_TIP_TAPER[k]) : (sm > 1 ? _smTab.tipTaper : _NODE_TIP_TAPER[k])));
         const halfW = baseHalfW * rootTuck * tipTaper;
         let halfT = isFade
           ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? _smTab.tipFactor : _NODE_TIP_FACTOR[k]) * 0.65)
-          : baseHalfT * rootThickTuck * (sm > 1 ? _smTab.thickPow : _NODE_THICK_POW[k]);
+          : baseHalfT * rootThickTuck * (customTip ? _tipOut.t : (sm > 1 ? _smTab.thickPow : _NODE_THICK_POW[k]));
         if (roundness > 0 && !isFade && !isBase) halfT += (halfW * 0.9 * rootThickTuck - halfT) * roundness;
 
         // 7-vertex crescent ring: zero per-vertex sqrt because (side, out) are orthonormal and (PROFILE_NX, PROFILE_NY) are unit!
