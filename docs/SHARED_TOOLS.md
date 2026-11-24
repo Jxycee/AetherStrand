@@ -29,7 +29,7 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 | `hairlineIrregularity` | 0..1 | 0.5 | Unevenness of the edge (small noise along the hairline). 0 = a clean drawn curve. |
 | `scalpColor` | `#rrggbb` | unset | Tint of the painted hair. Unset = the hair's own colour. |
 
-- Default colour (`scalpPaintColor`): 10% root, 45% base, 45% tip, averaged in linear space, times 1.25 for the sheen
+- Default colour (`scalpPaintColor`): 5% root, 40% base, 55% tip, averaged in linear space, times 2.0 for the sheen
   locks get from the hair shader (a plain average made painted sides read as bare scalp). In Unity, the paint
   material's `_Color` can be changed by hand afterwards.
 - Edge coverage (`scalpPaintAlpha`): a soft gradient mixed with fine stipple by `grain`, so it never ends on a hard line.
@@ -42,7 +42,17 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 
 - solid side hair, then a gradient to `stubble` at the ear-aligned cut line;
 - a pointed sideburn in front of the ear, an arch over the ear and a curved nape (`earAlignedCutPhi`);
-- no fade on the front hairline.
+- no fade on the front hairline (`frontBlend`, rad, default 0, instead thins the paint over a band behind the forehead
+  hairline, so the front edge is a soft gradient and not a dark painted brim).
+
+The density along a fade is one smooth curve (`paintRamp` in scalpPaint.ts, mirrored in the web overlay shader and the
+Unity ScalpPaint shader and C#): 1 down to the solid side hair, `stubble` at the cut line, 0 at cut line + `feather`. It
+keeps falling through the stubble value. The old two-part curve went flat there, so every fade showed a separate band of
+stubble that read as stacked layers. For a natural fade use a small `stubble` (about 0.3), a wider `feather` (about 0.09)
+and less `grain` (about 0.35): a soft gradient with fine grain, not a stippled band.
+
+Painted short hair now matches the lit locks: the default paint colour is brighter (see Hairline look). At the old
+brightness, painted sides showed as a dark band under the hair wherever the locks thinned.
 
 Builder config, both shown as sliders in the app for fade styles:
 
@@ -50,6 +60,19 @@ Builder config, both shown as sliders in the app for fade styles:
 |---|---|---|---|
 | `fadeHeight` | 0..1 | 0.4 | How far up the sides the fade climbs. |
 | `fadeBlend` | 0..1 | 0.75 (undercut-fade) | Width of the gradient from the top length into the short sides. Low = a hard barbered line, high = a long soft blend. |
+
+### Ears (every cut line follows the head's ears)
+
+Every sideburn, arch over the ear, fade line and nape curve is placed from the ear landmarks (`EAR_FRONT_THETA`,
+`EAR_BACK_THETA`, `EAR_CENTER_THETA`, `EAR_TOP_PHI`, `EAR_MID_PHI`, `EAR_LOBE_PHI` in hairBuilder.ts). They are live
+values: each build sets them from `config.earLandmarks` (`setEarLandmarks`), or the defaults (Tobin_Head.obj).
+
+- The web app measures the ears of a loaded character head (`measureHeadLandmarks` in characterHead.ts) and builds with
+  them, and Copy JSON and the exports carry them, so the Unity export is cut for the same ears it was previewed on.
+- `measureHeadLandmarks` finds the pinna as vertices standing more than 5% of the scalp radius off the skull right behind
+  them, which holds for any head. The earlier version misread jaw, mastoid and neck as ear and put Tobin's ear 0.2 rad
+  (about 5 cm) too far back, which put sideburns on the ear and opened bald temple corners.
+- To check landmarks by eye, render with `--no-hair --lines th:1.43,th:1.78,ph:1.68,ph:2.16` (see Preview renderer).
 
 `roundedHairline(centre, cornerLift, width)` gives a curved front hairline for the cut line (`hairlinePhi`): highest at
 the temple corners, lowest in the middle of the forehead. Combine it with `templeRecede` for the temple dip of most men's
@@ -80,6 +103,9 @@ shows as dark teeth along the hairline.
   - `length`, `volume` (height of the hair surface), `spike` (spiked clump tips on the top), `stand` and `quiff` (front lift:
     low where the hair leaves the hairline, highest a few centimetres back, rising straight up rather than out), `sweep`, `sideTaper` (0..1, default 0.5: how much flatter the sides and back lie than the top, so the head
     doesn't read as a bowl).
+  - `fadeEdge` (rad, default 0.3): in this band above the side and back edge the crop melts into the painted fade. The
+    hair surface sinks to the scalp, locks thin out and narrow, and the layer shadow lifts, so the crop ends with no
+    ledge or dark rim and the paint carries the fade on. 0 gives a hard-edged crop. The front hairline is not affected.
   - Every lock lies on one smooth hair surface whose height is set by position on the head, not per lock. Neighbouring
     locks then curve the same way in the same place, so the highlights run as broad bands across the clumps. Per-lock
     height profiles put a highlight dash on every lock.
@@ -122,6 +148,9 @@ the port should keep the same two-way rule.
 | `--no-paint` | Hide the scalp paint. |
 | `--magenta` | Paint the haired scalp magenta to find bald spots. |
 | `--no-conform` | Skip the head conform. |
+| `--no-hair` | Hide the hair (head and paint only). |
+| `--grid` | Draw the scalp coordinate grid on the head: blue lines of \|azimuth\|, red lines of phi, every 0.1 rad. |
+| `--lines th:1.43,ph:1.68,...` | Draw only these scalp lines (theta = \|azimuth\|, ph = phi), coloured blue, cyan, red, orange, green, yellow, magenta, white in order. Use it to place landmarks and cut lines on a head. |
 
 The preview draws a stand-in for the viewport hair shader on lock cards: about 18 strands across each card, frayed tips
 past 55% of the length and darker grooves between strands. Colours are taken as linear (as three.js does), so dark hair

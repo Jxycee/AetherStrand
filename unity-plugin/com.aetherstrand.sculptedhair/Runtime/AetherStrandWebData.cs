@@ -155,11 +155,24 @@ namespace AetherStrand
             double az = Math.Atan2(dx, dz);
             double phi = Math.Acos(Math.Max(-1.0, Math.Min(1.0, dy / r))) - HairlineJag(irregularity, az);
             double full = Sample(fullPhi, az), edge = Math.Max(full + 1e-4, Sample(edgePhi, az)), ed = Sample(edgeDensity, az);
-            double d;
-            if (phi <= full) d = 1.0;
-            else if (phi <= edge) d = 1.0 + (ed - 1.0) * Ss((phi - full) / (edge - full));
-            else d = ed * (1.0 - Ss((phi - edge) / Math.Max(1e-4, feather)));
-            return d * density;
+            return PaintRamp(phi, full, edge, ed, feather) * density;
+        }
+
+        /// <summary>Mirrors paintRamp in src/engine/scalpPaint.ts: one smooth monotone curve 1 -> ed (at edge) -> 0 (at edge + feather), no plateau at ed.</summary>
+        public static double PaintRamp(double phi, double full, double edge, double ed, double feather)
+        {
+            if (phi <= full) return 1.0;
+            double x2 = edge + Math.Max(1e-4, feather);
+            if (phi >= x2) return 0.0;
+            double h0 = Math.Max(1e-4, edge - full), h1 = x2 - edge;
+            double s0 = (ed - 1.0) / h0, s1 = -ed / h1;
+            double m1 = (s0 < 0.0 && s1 < 0.0) ? 2.0 * s0 * s1 / (s0 + s1) : 0.0;
+            double t, ya, yb, ma, mb, h;
+            if (phi <= edge) { t = (phi - full) / h0; ya = 1.0; yb = ed; ma = 0.0; mb = m1; h = h0; }
+            else { t = (phi - edge) / h1; ya = ed; yb = 0.0; ma = m1; mb = 0.0; h = h1; }
+            double t2 = t * t, t3 = t2 * t;
+            double v = (2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb;
+            return Math.Max(0.0, Math.Min(1.0, v));
         }
 
         /// <summary>Like EvalWeb but with the cut line pushed down by pad radians (used to pick which skin triangles the shell needs).</summary>

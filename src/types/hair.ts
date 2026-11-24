@@ -82,6 +82,13 @@ export interface HairBuilderConfig {
    * own colour (root-to-base tone); set it to tint the hairline differently (e.g. greyer temples).
    */
   scalpColor?: string;
+  /**
+   * Optional: where the ears are on the head the hair is built for, in web scalp coordinates (theta = |azimuth| from the
+   * front, phi = polar angle from the crown). Sideburns, the arch over the ear, fades and nape lines follow it. The web app
+   * fills it from a loaded character head (measureHeadLandmarks in characterHead.ts); without it the builder uses its
+   * defaults (Tobin's head). Carried in recipes, so an export is built for the same ears it was previewed on.
+   */
+  earLandmarks?: { earFrontTheta: number; earBackTheta: number; earCenterTheta: number; earTopPhi: number; earMidPhi: number; earLobePhi: number; napePhi?: number };
 }
 
 export interface ShaderConfig {

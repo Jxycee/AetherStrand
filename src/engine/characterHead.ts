@@ -47,6 +47,9 @@ export interface HeadLandmarks {
   napePhi: number;
 }
 
+/** Used when no ear can be found on a head: Tobin_Head.obj's measured landmarks (same as the hair builder's defaults). */
+export const DEFAULT_HEAD_LANDMARKS: HeadLandmarks = { earFrontTheta: 1.43, earBackTheta: 1.78, earCenterTheta: 1.66, earTopPhi: 1.68, earMidPhi: 1.94, earLobePhi: 2.16, napePhi: 2.1 };
+
 /** Minimal OBJ reader: v and f records (polygons fan-triangulated). Returns indexed geometry in the file's units. */
 export function parseObj(text: string): { positions: Float32Array; indices: Uint32Array } {
   const pos: number[] = [];
@@ -123,33 +126,42 @@ export function scalpCoords(x: number, y: number, z: number): { theta: number; p
 }
 
 /**
- * Ear landmarks from a fitted head (web space points). The ear is found as the outward bump on the side of the head:
- * for each side band, the skull's lateral silhouette is estimated from the points just in front of and behind the ear
- * region, and points standing clear of it by more than 6% of the cranium half-width are the pinna.
+ * Ear landmarks from a fitted head (web space points). The pinna is a thin flap standing off the side of the skull, so
+ * a vertex belongs to it when it stands clear of the skull surface right behind it: per small scalp cell (0.05 rad) the
+ * innermost vertex is the skull there, and a vertex more than 5% of the ellipsoid radius outside the innermost vertex of
+ * its own and neighbouring cells is ear. This holds for any head shape (an earlier version compared against the skull
+ * radius in bands in front of and behind the ear, which misread the jaw, mastoid and neck as ear and put Tobin's ear
+ * 0.2 rad too far back, so sideburns landed on the ear).
  */
 export function measureHeadLandmarks(pts: Float32Array): HeadLandmarks {
   type P = { theta: number; phi: number; r: number };
   const sc: P[] = [];
   for (let i = 0; i < pts.length; i += 3) sc.push(scalpCoords(pts[i], pts[i + 1], pts[i + 2]));
-  // skull radius profile by phi from the side region just behind the ear zone (theta 2.3..2.6) and in front (1.1..1.3)
-  const prof = (lo: number, hi: number) => {
-    const bins = new Array(64).fill(0).map(() => [] as number[]);
-    for (const p of sc) if (p.theta > lo && p.theta < hi && p.phi < Math.PI) bins[Math.min(63, Math.floor((p.phi / Math.PI) * 64))].push(p.r);
-    return bins.map((b) => (b.length ? b.sort((a, c) => a - c)[Math.floor(b.length * 0.9)] : NaN));
+  const T0 = 1.0, F0 = 1.3, STEP = 0.05, NT = 32, NF = 24;
+  const cellMin = new Array(NT * NF).fill(Infinity);
+  const cellOf = (p: P) => {
+    const a = Math.floor((p.theta - T0) / STEP), b = Math.floor((p.phi - F0) / STEP);
+    return a < 0 || a >= NT || b < 0 || b >= NF ? -1 : b * NT + a;
   };
-  const front = prof(1.05, 1.3), back = prof(2.35, 2.6);
+  for (const p of sc) { const k = cellOf(p); if (k >= 0) cellMin[k] = Math.min(cellMin[k], p.r); }
+  const skullAt = (k: number) => {
+    const a = k % NT, b = Math.floor(k / NT);
+    let m = Infinity;
+    for (let db = -1; db <= 1; db++) for (let da = -1; da <= 1; da++) {
+      const aa = a + da, bb = b + db;
+      if (aa >= 0 && aa < NT && bb >= 0 && bb < NF) m = Math.min(m, cellMin[bb * NT + aa]);
+    }
+    return m;
+  };
   const ear: P[] = [];
   for (const p of sc) {
-    if (p.theta < 1.3 || p.theta > 2.35 || p.phi < 1.3 || p.phi > 2.7) continue;
-    const b = Math.min(63, Math.floor((p.phi / Math.PI) * 64));
-    const ref = Math.max(front[b] || 0, back[b] || 0);
-    if (ref > 0 && p.r > ref + 0.06) ear.push(p);
+    // the side of the head above the jaw line (below phi ~2.35 the jaw and neck also stand off the skull)
+    if (p.theta < 1.15 || p.theta > 2.3 || p.phi < 1.45 || p.phi > 2.35) continue;
+    const k = cellOf(p);
+    if (k >= 0 && p.r - skullAt(k) > 0.05) ear.push(p);
   }
   const q = (a: number[], f: number) => { const s = a.slice().sort((x, y) => x - y); return s[Math.max(0, Math.min(s.length - 1, Math.round(f * (s.length - 1))))]; };
-  if (ear.length < 12) {
-    // fall back to the builder's defaults (Tobin, measured 2026-11-24)
-    return { earFrontTheta: 1.62, earBackTheta: 1.94, earCenterTheta: 1.78, earTopPhi: 1.64, earMidPhi: 1.86, earLobePhi: 2.10, napePhi: 2.1 };
-  }
+  if (ear.length < 12) return { ...DEFAULT_HEAD_LANDMARKS };
   const th = ear.map((p) => p.theta), ph = ear.map((p) => p.phi);
   // nape: lowest phi at the back centre where the surface stops following the skull (radius drops below 0.9)
   let napePhi = 2.1;

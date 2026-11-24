@@ -13,6 +13,7 @@
 //   ears and neck; no scalp core, so gaps show skin as they do in Unity)
 //   Scalp paint (the painted short-hair layer, scalpPaint.ts) is drawn on the head. --no-paint hides it; --magenta paints the
 //   bust's haired region magenta instead (old gap check).
+//   --no-hair hides the hair. --grid overlays the scalp coordinate grid on the head (blue |azimuth|, red phi, every 0.1 rad, thick lines at 0.5).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import * as THREE from 'three';
@@ -123,6 +124,11 @@ const cSpec2 = new THREE.Color(sh.secondarySpecColor ?? '#a07050');
 if (scalpCoreMesh) scalpCoreMesh.color.copy(cRoot).multiplyScalar(0.55);
 const usePaint = !args.includes('--no-paint') && !args.includes('--magenta') && !!hair.scalpPaint;
 const useMagenta = args.includes('--magenta');
+// --grid: draws the scalp coordinate grid on the head (|azimuth| blue, phi red; every 0.1 rad, thick at 0.5) to place landmarks
+const showGrid = args.includes('--grid') || !!arg('--lines');
+// --lines th:1.62,ph:1.64,...  draws only these scalp lines (|azimuth| or phi), coloured in order (blue, cyan, red, orange, green, yellow, magenta, white)
+const LINE_COLS = [[0.1, 0.3, 1], [0, 0.9, 0.9], [1, 0.1, 0.1], [1, 0.55, 0], [0.1, 0.85, 0.1], [1, 0.95, 0], [1, 0, 1], [1, 1, 1]];
+const gridLines = (arg('--lines') ?? '').split(',').filter(Boolean).map((t, i) => ({ th: t.startsWith('th'), v: Number(t.split(':')[1]), c: LINE_COLS[i % LINE_COLS.length] }));
 const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
 // painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
 const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40');
@@ -222,6 +228,17 @@ function renderView(vi: number) {
           col[idx * 3] = k * (skin[0] + (cPaint.r * st - skin[0]) * al);
           col[idx * 3 + 1] = k * (skin[1] + (cPaint.g * st - skin[1]) * al);
           col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * st - skin[2]) * al);
+          if (showGrid) {
+            // scalp-coordinate grid: blue lines every 0.1 rad of |azimuth|, red every 0.1 rad of phi (thick at each 0.5)
+            const sa = scalpAngles(lx, ly, lz), th = Math.abs(sa.az);
+            const near = (v: number, step: number, w: number) => Math.abs(v / step - Math.round(v / step)) * step < w;
+            if (gridLines.length) {
+              for (const g of gridLines) if (Math.abs((g.th ? th : sa.phi) - g.v) < 0.006) { col[idx * 3] = g.c[0]; col[idx * 3 + 1] = g.c[1]; col[idx * 3 + 2] = g.c[2]; }
+            } else {
+              if (near(th, 0.5, 0.008) || near(th, 0.1, 0.003)) { col[idx * 3] = 0.1; col[idx * 3 + 1] = 0.3; col[idx * 3 + 2] = 1; }
+              if (near(sa.phi, 0.5, 0.008) || near(sa.phi, 0.1, 0.003)) { col[idx * 3] = 1; col[idx * 3 + 1] = 0.15; col[idx * 3 + 2] = 0.1; }
+            }
+          }
           continue;
         }
         col[idx * 3] = (w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0]) * tone;
@@ -243,7 +260,7 @@ function renderView(vi: number) {
     const nor = m.geo.attributes.normal.array as Float32Array;
     for (let i = 0; i < pos.length; i += 9) {
       const p: number[][] = [], c: number[][] = [];
-      if (paint && m.paint) {
+      if ((paint || showGrid) && m.paint) {
         const wp: number[][] = [];
         for (let j = 0; j < 3; j++) {
           const o = i + j * 3;
@@ -280,7 +297,8 @@ function renderView(vi: number) {
   // a normal blended 42% toward the head normal (not the raw card normal, which dots every lock), plus the wide sheen band
   const pPow = sh.primaryPower ?? 76, pInt = sh.primaryIntensity ?? 0.32, sPow = sh.secondaryPower ?? 24, sInt = sh.secondaryIntensity ?? 0.2;
   const sstepK = (e0: number, e1: number, x: number) => { const c = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return c * c * (3 - 2 * c); };
-  const index = geo.index!.array as Uint32Array;
+  // --no-hair: head, paint and grid only
+  const index = args.includes('--no-hair') ? new Uint32Array(0) : (geo.index!.array as Uint32Array);
   const nV = pos.length / 3;
   const vp: number[][] = new Array(nV);
   const vc: number[][] = new Array(nV);

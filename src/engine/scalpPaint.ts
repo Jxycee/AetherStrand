@@ -92,11 +92,28 @@ export function hairlineJag(irregularity: number, az: number): number {
 export function evalScalpPaint(p: ScalpPaint, az: number, phiIn: number): number {
   const phi = phiIn - hairlineJag(p.irregularity ?? 0.5, az);
   const full = sampleArr(p.fullPhi, az), edge = Math.max(full + 1e-4, sampleArr(p.edgePhi, az)), ed = sampleArr(p.edgeDensity, az);
-  let d: number;
-  if (phi <= full) d = 1;
-  else if (phi <= edge) d = 1 + (ed - 1) * ss((phi - full) / (edge - full));
-  else d = ed * (1 - ss((phi - edge) / Math.max(1e-4, p.feather)));
-  return d * p.density;
+  return paintRamp(phi, full, edge, ed, p.feather) * p.density;
+}
+
+/**
+ * Density along a fade: 1 down to `full`, `ed` at `edge`, 0 at `edge + feather`, as ONE smooth monotone curve (cubic
+ * Hermite with the Fritsch-Carlson middle slope). The older two-piece smoothstep went flat at `edge`, so every fade had a
+ * plateau of stubble density that read as a separate band (a stacked, layered look); this ramp keeps falling through it.
+ * Mirrored in scalpPaintMaterial.ts (GLSL) and AetherStrand_ScalpPaint.shader (Unity).
+ */
+export function paintRamp(phi: number, full: number, edge: number, ed: number, feather: number): number {
+  if (phi <= full) return 1;
+  const x2 = edge + Math.max(1e-4, feather);
+  if (phi >= x2) return 0;
+  const h0 = Math.max(1e-4, edge - full), h1 = x2 - edge;
+  const s0 = (ed - 1) / h0, s1 = -ed / h1;
+  const m1 = s0 < 0 && s1 < 0 ? (2 * s0 * s1) / (s0 + s1) : 0;
+  const herm = (t: number, ya: number, yb: number, ma: number, mb: number, h: number) => {
+    const t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * ya + (t3 - 2 * t2 + t) * h * ma + (-2 * t3 + 3 * t2) * yb + (t3 - t2) * h * mb;
+  };
+  const d = phi <= edge ? herm((phi - full) / h0, 1, ed, 0, m1, h0) : herm((phi - edge) / h1, ed, 0, m1, 0, h1);
+  return Math.max(0, Math.min(1, d));
 }
 
 /**
@@ -144,8 +161,10 @@ export function scalpPaintColor(p: Pick<ScalpPaint, 'color'> | null | undefined,
  * sides look like bare scalp; the mix leans to base and tip and the gain stands in for the sheen. Mirrored in Unity
  * (AetherStrandScalpPaint.PaintColor).
  */
-export const PAINT_MIX: [number, number, number] = [0.1, 0.45, 0.45];
-export const PAINT_SHEEN = 1.25;
+// 2.0 (was 1.25): measured on the undercut fade with the preview renderer, painted sides at 1.25 came out about half as
+// bright as the lit locks above them, so a fade read as a dark band under the hair instead of the same hair cut shorter.
+export const PAINT_MIX: [number, number, number] = [0.05, 0.4, 0.55];
+export const PAINT_SHEEN = 2.0;
 
 /**
  * Applies the shared hairline look to a paint: softness widens the final falloff (centred on the cut line, so the hairline

@@ -65,6 +65,22 @@ Shader "AetherStrand/ScalpPaint"
                 return lerp(a, b, f * f * (3.0 - 2.0 * f));
             }
 
+            // mirrors paintRamp in src/engine/scalpPaint.ts: one smooth monotone curve 1 -> ed (at edge) -> 0 (at edge + feather)
+            float PaintRamp(float phi, float full, float edge, float ed, float feather)
+            {
+                if (phi <= full) return 1.0;
+                float x2 = edge + max(1e-4, feather);
+                if (phi >= x2) return 0.0;
+                float h0 = max(1e-4, edge - full), h1 = x2 - edge;
+                float s0 = (ed - 1.0) / h0, s1 = -ed / h1;
+                float m1 = (s0 < 0.0 && s1 < 0.0) ? 2.0 * s0 * s1 / (s0 + s1) : 0.0;
+                float t, ya, yb, ma, mb, h;
+                if (phi <= edge) { t = (phi - full) / h0; ya = 1.0; yb = ed; ma = 0.0; mb = m1; h = h0; }
+                else { t = (phi - edge) / h1; ya = ed; yb = 0.0; ma = m1; mb = 0.0; h = h1; }
+                float t2 = t * t, t3 = t2 * t;
+                return saturate((2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb);
+            }
+
             half4 frag(V i) : SV_Target
             {
                 float3 d = (i.web - HC) / RADII;
@@ -74,11 +90,7 @@ Shader "AetherStrand/ScalpPaint"
                 phi -= _Irregularity * (0.024 * (vnoise(az, 150.0) - 0.5) * 2.0 + 0.011 * (vnoise(az, 440.0) - 0.5) * 2.0);
                 float3 c = SAMPLE_TEXTURE2D(_Curves, sampler_Curves, float2((az + PI) / (2.0 * PI), 0.5)).rgb;
                 float full = c.r, edge = max(c.r + 1e-4, c.g), ed = c.b;
-                float dens;
-                if (phi <= full) dens = 1.0;
-                else if (phi <= edge) dens = lerp(1.0, ed, smoothstep(0.0, 1.0, (phi - full) / (edge - full)));
-                else dens = ed * (1.0 - smoothstep(0.0, 1.0, (phi - edge) / max(1e-4, _Feather)));
-                dens *= _Density;
+                float dens = PaintRamp(phi, full, edge, ed, _Feather) * _Density;
                 clip(dens - 0.002);
                 // scalpPaintAlpha: a soft gradient mixed with stipple by grain, so the edge blends into the skin
                 float n = 0.5 + (hash21(floor(float2(az, phi) / _GrainCell)) - 0.5) * min(1.0, _Grain + 0.2);

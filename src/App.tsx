@@ -169,6 +169,13 @@ export default function App() {
   const [builderConfig, setBuilderConfig] = useState<HairBuilderConfig | null>(
     initialRandom ? initialRandom.builder : null
   );
+  // What the hair is built from: the style plus, while a character head is loaded, that head's measured ear landmarks, so
+  // sideburns, the ear arch and the fade line sit on this head's ears. It is also what Copy JSON and the exports carry, so
+  // the Unity export is built for the same ears.
+  const buildConfig = useMemo<HairBuilderConfig | null>(
+    () => (builderConfig && characterHead ? { ...builderConfig, earLandmarks: characterHead.landmarks } : builderConfig),
+    [builderConfig, characterHead]
+  );
   const [customStyleName, setCustomStyleName] = useState<string | null>(
     initialRandom ? initialRandom.name : null
   );
@@ -314,7 +321,7 @@ export default function App() {
       schemaVersion: '2.0',
       presetId,
       customName: customStyleName ?? undefined,
-      builder: builderConfig ?? undefined,
+      builder: buildConfig ?? undefined,
       pipeline,
       lightingPreset,
       motionMode,
@@ -326,7 +333,7 @@ export default function App() {
   }, [
     presetId,
     customStyleName,
-    builderConfig,
+    buildConfig,
     pipeline,
     lightingPreset,
     motionMode,
@@ -546,8 +553,8 @@ export default function App() {
   const previewExportLocks = useMemo(() => {
     const liveLocks = viewportRef.current?.getExportLockGeometry();
     if (liveLocks && liveLocks.length > 0) return liveLocks;
-    return buildExportLocksForBlender(presetId, builderConfig, physicsConfig.strandWidthScale);
-  }, [presetId, builderConfig, physicsConfig.strandWidthScale, simStats]);
+    return buildExportLocksForBlender(presetId, buildConfig, physicsConfig.strandWidthScale);
+  }, [presetId, buildConfig, physicsConfig.strandWidthScale, simStats]);
 
   const pluginFiles = useMemo(
     () => generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, previewExportLocks),
@@ -564,7 +571,7 @@ export default function App() {
       const activeLocks =
         liveLocks && liveLocks.length > 0
           ? liveLocks
-          : buildExportLocksForBlender(presetId, builderConfig, physicsConfig.strandWidthScale);
+          : buildExportLocksForBlender(presetId, buildConfig, physicsConfig.strandWidthScale);
       const exportFiles = generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, activeLocks);
 
       for (const file of exportFiles) {
@@ -613,7 +620,7 @@ export default function App() {
     }
   }, [
     exporting,
-    builderConfig,
+    buildConfig,
     presetId,
     pipeline,
     shaderConfig,
@@ -640,7 +647,7 @@ export default function App() {
             <HairViewport
               ref={viewportRef}
               presetId={presetId}
-              builderConfig={builderConfig}
+              builderConfig={buildConfig}
               shaderConfig={shaderConfig}
               physicsConfig={physicsConfig}
               motionMode={motionMode}
@@ -735,7 +742,7 @@ export default function App() {
         <HairViewport
           ref={viewportRef}
           presetId={presetId}
-          builderConfig={builderConfig}
+          builderConfig={buildConfig}
           shaderConfig={shaderConfig}
           physicsConfig={physicsConfig}
           motionMode={motionMode}

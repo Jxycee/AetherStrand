@@ -42,6 +42,20 @@ const frag = /* glsl */ `
     float a = h11(mod(i, cells)), b = h11(mod(i + 1.0, cells));
     return mix(a, b, f * f * (3.0 - 2.0 * f));
   }
+  // paintRamp (scalpPaint.ts): one smooth monotone curve 1 -> ed (at edge) -> 0 (at edge + feather), no plateau at ed
+  float paintRamp(float phi, float full, float edge, float ed, float feather) {
+    if (phi <= full) return 1.0;
+    float x2 = edge + max(1e-4, feather);
+    if (phi >= x2) return 0.0;
+    float h0 = max(1e-4, edge - full), h1 = x2 - edge;
+    float s0 = (ed - 1.0) / h0, s1 = -ed / h1;
+    float m1 = (s0 < 0.0 && s1 < 0.0) ? 2.0 * s0 * s1 / (s0 + s1) : 0.0;
+    float t, ya, yb, ma, mb, h;
+    if (phi <= edge) { t = (phi - full) / h0; ya = 1.0; yb = ed; ma = 0.0; mb = m1; h = h0; }
+    else { t = (phi - edge) / h1; ya = ed; yb = 0.0; ma = m1; mb = 0.0; h = h1; }
+    float t2 = t * t, t3 = t2 * t;
+    return clamp((2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb, 0.0, 1.0);
+  }
   void main() {
     vec3 d = (vLocal - uHeadCenter) / uRadii;
     float r = length(d);
@@ -50,11 +64,7 @@ const frag = /* glsl */ `
     phi -= uIrreg * (0.024 * (vnoise(az, 150.0) - 0.5) * 2.0 + 0.011 * (vnoise(az, 440.0) - 0.5) * 2.0);
     vec3 c = texture2D(uCurves, vec2((az + 3.14159265) / 6.2831853, 0.5)).rgb;
     float full = c.r, edge = max(c.r + 1e-4, c.g), ed = c.b;
-    float dens;
-    if (phi <= full) dens = 1.0;
-    else if (phi <= edge) dens = mix(1.0, ed, smoothstep(0.0, 1.0, (phi - full) / (edge - full)));
-    else dens = ed * (1.0 - smoothstep(0.0, 1.0, (phi - edge) / max(1e-4, uFeather)));
-    dens *= uDensity;
+    float dens = paintRamp(phi, full, edge, ed, uFeather) * uDensity;
     if (dens < 0.002) discard;
     // scalpPaintAlpha: soft gradient mixed with stipple by grain
     float n = 0.5 + (hash(floor(vec2(az, phi) / 0.004)) - 0.5) * min(1.0, uGrain + 0.2);
