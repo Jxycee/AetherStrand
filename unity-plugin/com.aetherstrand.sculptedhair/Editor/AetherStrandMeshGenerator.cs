@@ -63,6 +63,9 @@ namespace AetherStrand.Editor
             public float fadeStart = float.NaN; // NaN: default fade curve (alpha 0.25)
             public int smooth = 1;        // shared fix 3: 1..4 Catmull-Rom subdivision of the node centreline (1 = legacy mesh)
             public float roundness = 0f;  // 0..1: blends ribbon thickness toward width (tube-like section)
+            public float tipStart = float.NaN; // NaN: legacy end taper (starts at 0.44)
+            public float tipWidth = 0f;   // 0..0.9: width/thickness held to the end, rounded cap (locs, blunt cuts)
+            public float ripple = 0f, rippleFreq = 9f; // 0..0.45: periodic width bumps along the lock (locs, rope twists)
             public float scalpRoot = 0.65f;
             public bool lockNormal;
             public Vector3 rootNormal = Vector3.up;
@@ -431,11 +434,14 @@ namespace AetherStrand.Editor
                     float rootTuck = isBase ? 0.88f + 0.12f * rSin : rootMinW + (1f - rootMinW) * rSin;
                     float rootThickTuck = isBase ? 1.0f : 0.2f + 0.8f * rSin;
                     bool isFade = lk.isFadeCap;
-                    float tipTaper = isFade ? 1.0f : isBase
+                    bool customTip = !isFade && (lk.tipWidth > 0f || !float.IsNaN(lk.tipStart) || lk.ripple > 0f);
+                    float ctW = 1f, ctT = 1f;
+                    if (customTip) TipShape(t, lk.tipStart, lk.tipWidth, lk.ripple, lk.rippleFreq, out ctW, out ctT);
+                    float tipTaper = isFade ? 1.0f : customTip ? ctW : isBase
                         ? Mathf.Max(0.04f, t < 0.42f ? 1f - t * 0.16f : Mathf.Pow((1f - t) / 0.58f, 1.12f) * 0.933f)
                         : Mathf.Max(0.06f, t < 0.44f ? 1f - t * 0.14f : Mathf.Pow((1f - t) / 0.56f, 0.94f) * 0.938f);
                     float halfW = baseHalfW * rootTuck * tipTaper;
-                    float halfT = baseHalfT * rootThickTuck * (isFade ? 0.55f * (1f - t * 0.65f) : Mathf.Pow(Mathf.Max(0.04f, 1f - t), 0.86f));
+                    float halfT = baseHalfT * rootThickTuck * (isFade ? 0.55f * (1f - t * 0.65f) : customTip ? ctT : Mathf.Pow(Mathf.Max(0.04f, 1f - t), 0.86f));
                     if (lk.roundness > 0f && !isFade && !isBase) halfT += (halfW * 0.9f * rootThickTuck - halfT) * Mathf.Clamp01(lk.roundness);
 
                     BoneWeight bw = ComputeRingWeight(m, t, isDynamic, chainBones);
@@ -569,11 +575,15 @@ namespace AetherStrand.Editor
             float maxZ = float.NegativeInfinity;
             float minZ = float.PositiveInfinity;
 
-            var parsedRaw = new List<(string zone, float w, float th, float seed, float ao, bool isBase, List<Vector3> pts, float scalp, bool lockN, Vector3 rootN, bool fade, float fadeStart, int smooth, float round)>();
+            var parsedRaw = new List<(string zone, float w, float th, float seed, float ao, bool isBase, List<Vector3> pts, float scalp, bool lockN, Vector3 rootN, bool fade, float fadeStart, int smooth, float round, float tipStart, float tipWidth, float ripple, float rippleFreq)>();
             var fadeRx = new Regex("\"isFadeCap\"\\s*:\\s*(true|false)");
             var fadeStartRx = new Regex("\"fadeStart\"\\s*:\\s*([-0-9.eE+]+)");
             var smoothRx = new Regex(@"""smooth"" *: *([-0-9.eE+]+)");
             var roundRx = new Regex(@"""roundness"" *: *([-0-9.eE+]+)");
+            var tipStartRx = new Regex(@"""tipStart"" *: *([-0-9.eE+]+)");
+            var tipWidthRx = new Regex(@"""tipWidth"" *: *([-0-9.eE+]+)");
+            var rippleRx = new Regex(@"""ripple"" *: *([-0-9.eE+]+)");
+            var rippleFreqRx = new Regex(@"""rippleFreq"" *: *([-0-9.eE+]+)");
             foreach (Match m in matches)
             {
                 string blk = m.Value;
@@ -618,7 +628,11 @@ namespace AetherStrand.Editor
                 if (pts.Count >= 2)
                     parsedRaw.Add((zone, w, th, seed, ao, isBase, pts, scalp, lockN, rootN, fadeRx.Match(blk) is Match fm && fm.Success && fm.Groups[1].Value == "true", fadeStartRx.Match(blk) is Match fsm && fsm.Success ? ParseF(fsm.Groups[1].Value, 0.25f) : float.NaN,
                         smoothRx.Match(blk) is Match smm && smm.Success ? Mathf.Clamp(Mathf.RoundToInt(ParseF(smm.Groups[1].Value, 1f)), 1, 4) : 1,
-                        roundRx.Match(blk) is Match rdm && rdm.Success ? Mathf.Clamp01(ParseF(rdm.Groups[1].Value, 0f)) : 0f));
+                        roundRx.Match(blk) is Match rdm && rdm.Success ? Mathf.Clamp01(ParseF(rdm.Groups[1].Value, 0f)) : 0f,
+                        tipStartRx.Match(blk) is Match tsm && tsm.Success ? ParseF(tsm.Groups[1].Value, 0.44f) : float.NaN,
+                        tipWidthRx.Match(blk) is Match twm && twm.Success ? Mathf.Clamp(ParseF(twm.Groups[1].Value, 0f), 0f, 0.9f) : 0f,
+                        rippleRx.Match(blk) is Match rpm && rpm.Success ? Mathf.Clamp(ParseF(rpm.Groups[1].Value, 0f), 0f, 0.45f) : 0f,
+                        rippleFreqRx.Match(blk) is Match rfm && rfm.Success ? Mathf.Max(1f, ParseF(rfm.Groups[1].Value, 9f)) : 9f));
             }
 
             // Auto-normalize if an unscaled 0.97m web-bust JSON is fed in
@@ -652,6 +666,10 @@ namespace AetherStrand.Editor
                     fadeStart = item.fadeStart,
                     smooth = item.smooth,
                     roundness = item.round,
+                    tipStart = item.tipStart,
+                    tipWidth = item.tipWidth,
+                    ripple = item.ripple,
+                    rippleFreq = item.rippleFreq,
                     scalpRoot = item.scalp,
                     lockNormal = item.lockN,
                     rootNormal = item.rootN,
@@ -858,6 +876,37 @@ namespace AetherStrand.Editor
             if (string.Equals(z, "Crown", StringComparison.OrdinalIgnoreCase)) return "Crown";
             if (string.Equals(z, "Rear", StringComparison.OrdinalIgnoreCase)) return "Rear";
             return "Sides";
+        }
+
+        /// <summary>Per-lock tip shape, mirror of computeTipShape in hairPhysics.ts (mesh only).</summary>
+        static void TipShape(float t, float tipStart, float tipWidth, float ripple, float rippleFreq, out float w, out float th)
+        {
+            float s = float.IsNaN(tipStart) ? 0.44f : Mathf.Clamp(tipStart, 0.2f, 0.97f);
+            float tw = Mathf.Clamp(tipWidth, 0f, 0.9f);
+            t = Mathf.Min(1f, t * (NodesPerLock - 1) / (float)(NodesPerLock - 2)); // last ring = node N-2; tip vertex closes at N-1
+            float u = t < s ? t * 0.44f / s : 0.44f + ((t - s) / (1f - s)) * 0.56f;
+            w = Mathf.Max(0.06f, u < 0.44f ? 1f - u * 0.14f : Mathf.Pow((1f - u) / 0.56f, 0.94f) * 0.938f);
+            th = Mathf.Pow(Mathf.Max(0.04f, 1f - u), 0.86f);
+            if (tw > 0f)
+            {
+                w = tw + (1f - tw) * w;
+                th = tw + (1f - tw) * th;
+                const float cap = 0.07f;
+                if (t > 1f - cap)
+                {
+                    float c = (t - (1f - cap)) / cap;
+                    float f = 0.55f + 0.45f * Mathf.Sqrt(Mathf.Max(0f, 1f - c * c));
+                    w *= f; th *= f;
+                }
+            }
+            float rp = Mathf.Clamp(ripple, 0f, 0.45f);
+            if (rp > 0f)
+            {
+                float fq = Mathf.Max(1f, rippleFreq);
+                float rf = Mathf.Clamp01((t - 0.04f) / 0.11f);
+                float m = 1f - rp * 0.5f * (1f - Mathf.Cos(2f * Mathf.PI * fq * t)) * rf * rf * (3f - 2f * rf);
+                w *= m; th *= m;
+            }
         }
 
         private static float ParseF(string s, float def)

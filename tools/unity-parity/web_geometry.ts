@@ -28,6 +28,14 @@ export function exportGeometry(recipe: any): any {
     e.restMidR = lk.restMidR;
     e.rootRawY = lk.particles[0].rawRestLocal.y;
     e.stiffnessWeight = lk.particles.map((p: any) => p.stiffnessWeight);
+    // Mesh-shape fields the plugin reads (AetherStrandWebData.cs); written only when set so legacy exports are unchanged.
+    if (lk.isFadeCap) e.isFadeCap = true;
+    if (lk.fadeStart !== undefined) e.fadeStart = lk.fadeStart;
+    if (lk.smooth !== undefined && lk.smooth > 1) e.smooth = lk.smooth;
+    if (lk.roundness !== undefined && lk.roundness > 0) e.roundness = lk.roundness;
+    if (lk.tipStart !== undefined) e.tipStart = lk.tipStart;
+    if (lk.tipWidth !== undefined && lk.tipWidth > 0) e.tipWidth = lk.tipWidth;
+    if (lk.ripple !== undefined && lk.ripple > 0) { e.ripple = lk.ripple; e.rippleFreq = lk.rippleFreq ?? 9; }
   });
   return {
     schemaVersion: '2.1',
@@ -36,7 +44,7 @@ export function exportGeometry(recipe: any): any {
     presetId: recipe.presetId,
     presetName: recipe.customName ?? recipe.presetId,
     coordinateSystem: 'blender_z_up_neg_y_front',
-    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight per lock',
+    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight per lock; mesh: isFadeCap,fadeStart,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq when set',
     lockCount: exported.length,
     locks: exported,
   };

@@ -26,6 +26,14 @@ export interface LockBuildSpec {
   smooth?: number;
   /** 0..1: blends ribbon thickness toward its width for a rounder, tube-like cross-section (default 0). */
   roundness?: number;
+  /** 0.2..0.97: where the end taper starts along the lock (default 0.44). Later = fuller to the end. Mesh-only. */
+  tipStart?: number;
+  /** 0..0.9: share of width/thickness held through the end, closed with a short rounded cap (locs, blunt cuts). 0 = pointed tip. Mesh-only. */
+  tipWidth?: number;
+  /** 0..0.45: periodic width/thickness bumps along the lock (locs, rope twists, braid sections). Use smooth 3-4. Mesh-only. */
+  ripple?: number;
+  /** Bumps along the lock for ripple (default 9). */
+  rippleFreq?: number;
 }
 
 export interface CuratedHairPalette {
@@ -80,6 +88,9 @@ export const ARCHETYPE_METADATA: ArchetypeMeta[] = [
   { id: 'braided-crown', label: 'Braided Crown', inspiration: 'Fantasy healer / noble braids' },
   { id: 'wavy-bard', label: 'Wavy Bard', inspiration: 'Healer / bard loose shoulder waves' },
   { id: 'samurai-topknot', label: 'Samurai Topknot', inspiration: 'Ronin / warrior high bun' },
+  { id: 'curtain-part', label: 'Curtain Part', inspiration: 'Centre-parted curtain fringe, idol / young swordsman' },
+  { id: 'rope-locs', label: 'Rope Locs', inspiration: 'Wanderer / druid shoulder-length locs' },
+  { id: 'coily-afro', label: 'Coily Crown', inspiration: 'Rounded coily afro, monk / brawler' },
 ];
 
 export const ALL_ARCHETYPES: HairBuilderArchetype[] = ARCHETYPE_METADATA.map((a) => a.id);
@@ -330,6 +341,231 @@ function buildGatheredTailLock(params: {
     );
   }
   return pts;
+}
+
+// ---- Surface-arc + gravity-fall lock helpers (curtain-part, rope-locs, coily-afro) ----
+// Locks are laid over the skull along a great-circle arc (root -> release direction), then fall under gravity with
+// collision against the bust proxy (head lathe, ears, neck, shoulders; dimensions from bustModel.ts, head-pivot space).
+
+/**
+ * Reference haired region of the bust head (phi from the crown apex, by absolute azimuth from the front): 1.28 across the
+ * forehead, 1.62 just behind the ear, 2.1 at the nape. The CPU preview paints this region magenta, so a style's shell and
+ * edge locks should reach at least this far wherever its cut is meant to cover the head.
+ */
+export function scalpRegionPhi(azAbs: number): number {
+  const a = Math.abs(azAbs);
+  return a < 1.0 ? 1.28 : a < 1.9 ? 1.28 + ((a - 1.0) / 0.9) * 0.34 : 1.62 + ((a - 1.9) / (Math.PI - 1.9)) * 0.48;
+}
+
+/** Unit direction on the scalp sphere for (theta = azimuth from the front, phi = angle from the crown apex). */
+function scalpDir(theta: number, phi: number): THREE.Vector3 {
+  return new THREE.Vector3(Math.sin(theta) * Math.sin(phi), Math.cos(phi), Math.cos(theta) * Math.sin(phi));
+}
+
+/** Unit direction in part-centred angles: alpha = sideways from the part plane (0 on the part, +-pi/2 at the ear axis),
+ *  beta = along the part (0 apex, + toward the forehead, - toward the back), yaw = part offset around the vertical axis. */
+function partDir(alpha: number, beta: number, yaw = 0): THREE.Vector3 {
+  const ca = Math.cos(alpha);
+  const x = Math.sin(alpha), z = ca * Math.sin(beta);
+  return new THREE.Vector3(x * Math.cos(yaw) + z * Math.sin(yaw), ca * Math.cos(beta), -x * Math.sin(yaw) + z * Math.cos(yaw));
+}
+
+/** Point on the scalp ellipsoid along a unit direction, `lift` above the surface. */
+function scalpDirPoint(dir: THREE.Vector3, lift: number): THREE.Vector3 {
+  return new THREE.Vector3(
+    HEAD_CENTER_LOCAL.x + dir.x * (SCALP_RX + lift),
+    HEAD_CENTER_LOCAL.y + dir.y * (SCALP_RY + lift),
+    HEAD_CENTER_LOCAL.z + dir.z * (SCALP_RZ + lift)
+  );
+}
+
+function slerpDir(a: THREE.Vector3, b: THREE.Vector3, t: number): THREE.Vector3 {
+  const dot = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+  const om = Math.acos(dot);
+  if (om < 1e-4) return a.clone().lerp(b, t).normalize();
+  const s = Math.sin(om);
+  return a.clone().multiplyScalar(Math.sin((1 - t) * om) / s).addScaledVector(b, Math.sin(t * om) / s).normalize();
+}
+
+const _lerpProfile = (prof: number[][], y: number): number => {
+  if (y <= prof[0][1]) return prof[0][0];
+  for (let i = 1; i < prof.length; i++) {
+    if (y <= prof[i][1]) {
+      const f = (y - prof[i - 1][1]) / Math.max(1e-6, prof[i][1] - prof[i - 1][1]);
+      return THREE.MathUtils.lerp(prof[i - 1][0], prof[i][0], f);
+    }
+  }
+  return prof[prof.length - 1][0];
+};
+// [radius, y] in head-pivot space
+const _FACE_PROFILE = [[0.0, 0.0], [0.052, 0.012], [0.122, 0.055], [0.192, 0.135], [0.244, 0.245], [0.272, 0.365], [0.28, 0.48]];
+const _CRANIUM_PROFILE = [[0.28, 0.48], [0.264, 0.585], [0.208, 0.672], [0.115, 0.725], [0.0, 0.742]];
+const _NECK_PROFILE = [[0.145, -0.21], [0.118, -0.11], [0.112, -0.01], [0.122, 0.09]];
+const _TORSO_PROFILE = [[0.41, -0.24], [0.34, -0.175], [0.175, -0.125], [0.145, -0.09]];
+
+/** Push a point out of the bust proxy (scalp ellipsoid, face lathe, ears, neck, shoulders) plus `margin`. Mutates and returns p. */
+function clearOfBody(p: THREE.Vector3, margin: number): THREE.Vector3 {
+  // skull
+  {
+    const dx = p.x - HEAD_CENTER_LOCAL.x, dy = p.y - HEAD_CENTER_LOCAL.y, dz = p.z - HEAD_CENTER_LOCAL.z;
+    const r = Math.sqrt((dx / (SCALP_RX + margin)) ** 2 + (dy / (SCALP_RY + margin)) ** 2 + (dz / (SCALP_RZ + margin)) ** 2);
+    if (r < 1 && p.y > 0.3) {
+      p.set(HEAD_CENTER_LOCAL.x + dx / r, HEAD_CENTER_LOCAL.y + dy / r, HEAD_CENTER_LOCAL.z + dz / r);
+    }
+  }
+  const pushRing = (rx: number, rz: number, cz: number) => {
+    const dz = p.z - cz;
+    const q = Math.sqrt((p.x / (rx + margin)) ** 2 + (dz / (rz + margin)) ** 2);
+    if (q < 1 && q > 1e-6) { p.x /= q; p.z = cz + dz / q; }
+  };
+  if (p.y >= 0 && p.y <= 0.48) { const r = _lerpProfile(_FACE_PROFILE, p.y); pushRing(r * 0.97, r * 1.09, 0); }
+  // upper head lathe (its forehead bulges past the scalp ellipsoid): push out radially from the head centre
+  for (let it = 0; it < 24 && p.y > 0.48 && p.y < 0.742 + margin; it++) {
+    const r = _lerpProfile(_CRANIUM_PROFILE, Math.min(0.742, p.y)) + margin;
+    if ((p.x / (r * 0.97)) ** 2 + (p.z / (r * 1.09)) ** 2 >= 1 && p.y < 0.742) break;
+    if (p.y >= 0.742) { if (Math.hypot(p.x, p.z) > 0.12 || p.y > 0.742 + margin) break; }
+    p.set(p.x * 1.012, 0.42 + (p.y - 0.42) * 1.012, p.z * 1.012);
+  }
+  if (p.y >= -0.21 && p.y <= 0.09) { const r = _lerpProfile(_NECK_PROFILE, p.y); pushRing(r * 0.96, r * 1.04, -0.032); }
+  if (p.y >= -0.4 && p.y <= -0.09) { const r = _lerpProfile(_TORSO_PROFILE, p.y); pushRing(r * 1.12, r * 0.56, -0.032); }
+  // ears: short vertical capsule over each ear (bust ear + Tobin ear span)
+  for (const sd of [-1, 1]) {
+    const cy = THREE.MathUtils.clamp(p.y, 0.2, 0.36);
+    const dx = p.x - sd * 0.258, dy = p.y - cy, dz = p.z + 0.03;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const rr = 0.052 + margin;
+    if (d < rr && d > 1e-6) { const k = rr / d; p.set(sd * 0.258 + dx * k, cy + dy * k, -0.03 + dz * k); }
+  }
+  return p;
+}
+
+/** Great-circle arc over the skull from `from` to `to` (unit dirs), `n` nodes, lift(u) above the scalp. */
+function skullArc(from: THREE.Vector3, to: THREE.Vector3, n: number, lift: (u: number) => number, clear = 0.004): THREE.Vector3[] {
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) {
+    const u = n === 1 ? 0 : i / (n - 1);
+    pts.push(clearOfBody(scalpDirPoint(slerpDir(from, to, u), lift(u)), clear));
+  }
+  return pts;
+}
+
+/** Continue a lock with `count` gravity-fall nodes covering about `len`; `out` is a horizontal unit push, `flare` per step,
+ *  `bend` how fast the direction turns downward (0..1), `margin` body clearance, `flick` outward kick on the last nodes. */
+function gravityFall(pts: THREE.Vector3[], count: number, len: number, o: { out: THREE.Vector3; flare: number; bend?: number; margin: number; flick?: number; sway?: THREE.Vector3; swayAmp?: number; swayPhase?: number }): THREE.Vector3[] {
+  const down = new THREE.Vector3(0, -1, 0);
+  const last = pts[pts.length - 1];
+  const prev = pts[pts.length - 2] ?? last.clone().add(new THREE.Vector3(0, 0.01, 0));
+  const d = last.clone().sub(prev).normalize();
+  const step = len / Math.max(1, count);
+  const bend = o.bend ?? 0.42;
+  let p = last.clone();
+  for (let j = 1; j <= count; j++) {
+    const t = j / count;
+    d.lerp(down, bend).addScaledVector(o.out, o.flare).normalize();
+    p = p.clone().addScaledVector(d, step);
+    if (o.flick) p.addScaledVector(o.out, o.flick * Math.max(0, (t - 0.6) / 0.4) ** 2);
+    if (o.sway && o.swayAmp) p.addScaledVector(o.sway, Math.sin(t * Math.PI * 1.6 + (o.swayPhase ?? 0)) * o.swayAmp * t);
+    clearOfBody(p, o.margin);
+    pts.push(p);
+  }
+  return pts;
+}
+
+/** Resample a polyline to `n` points evenly spaced by arc length between fractions [s0, s1] (s1 may exceed 1: extrapolates the last segment). */
+/**
+ * Nodes for a blunt-ended lock (use with the tipWidth / tipStart spec fields): the mesh's last ring sits on node N-2 and
+ * the single tip vertex on node N-1, so nodes 0..N-2 cover the whole path and node N-1 sits just past the end (capLen),
+ * giving a short rounded cap instead of a long cone. Path is any polyline from root to end.
+ */
+export function bluntLockPoints(path: THREE.Vector3[], capLen: number): THREE.Vector3[] {
+  const pts = resamplePolyline(densifyPath(path, 6), NODES_PER_LOCK - 1, 0, 1);
+  const a = pts[pts.length - 1], b = pts[pts.length - 2];
+  const dir = a.clone().sub(b);
+  const L = dir.length();
+  pts.push(a.clone().addScaledVector(dir, L > 1e-9 ? capLen / L : 0));
+  return pts;
+}
+
+/**
+ * Nodes for a coiled lock (coily / kinky curls, spiral curls, twists): nodes 0..N-2 sit exactly on a helix of `radius`
+ * wound `turns` times around the centreline (parallel-transport frame, so the coil never flips), ramping in over the
+ * first `rampIn` of the length; node N-1 is a short cap past the end as in bluntLockPoints. 12 nodes resolve about
+ * 2.5 turns; use smooth 3-4 and the ripple field for finer kink texture.
+ */
+export function coilLockPoints(center: THREE.Vector3[], radius: number, turns: number, phase: number, capLen: number, rampIn = 0.2): THREE.Vector3[] {
+  const n = NODES_PER_LOCK - 1;
+  const fine = resamplePolyline(densifyPath(center, 6), 64, 0, 1);
+  const tang = fine.map((p, i) => fine[Math.min(fine.length - 1, i + 1)].clone().sub(fine[Math.max(0, i - 1)]).normalize());
+  const ref = Math.abs(tang[0].y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const nrm = [ref.clone().sub(tang[0].clone().multiplyScalar(ref.dot(tang[0]))).normalize()];
+  for (let i = 1; i < fine.length; i++) {
+    const v = nrm[i - 1].clone().sub(tang[i].clone().multiplyScalar(nrm[i - 1].dot(tang[i])));
+    nrm.push(v.lengthSq() > 1e-12 ? v.normalize() : nrm[i - 1].clone());
+  }
+  const out: THREE.Vector3[] = [];
+  for (let k = 0; k < n; k++) {
+    const u = k / (n - 1);
+    const fi = Math.min(fine.length - 1, Math.round(u * (fine.length - 1)));
+    const b = new THREE.Vector3().crossVectors(tang[fi], nrm[fi]);
+    const a = phase + u * turns * Math.PI * 2;
+    const r = radius * _ss(u / Math.max(1e-3, rampIn));
+    out.push(fine[fi].clone().addScaledVector(nrm[fi], Math.cos(a) * r).addScaledVector(b, Math.sin(a) * r));
+  }
+  const e = out[n - 1], d = e.clone().sub(out[n - 2]);
+  const L = d.length();
+  out.push(e.clone().addScaledVector(d, L > 1e-9 ? capLen / L : 0));
+  return out;
+}
+
+function resamplePolyline(src: THREE.Vector3[], n: number, s0 = 0, s1 = 1): THREE.Vector3[] {
+  const cum = [0];
+  for (let i = 1; i < src.length; i++) cum.push(cum[i - 1] + src[i].distanceTo(src[i - 1]));
+  const total = cum[cum.length - 1] || 1;
+  const at = (s: number) => {
+    const L = s * total;
+    let i = 1;
+    while (i < src.length - 1 && cum[i] < L) i++;
+    const f = (L - cum[i - 1]) / Math.max(1e-9, cum[i] - cum[i - 1]);
+    return src[i - 1].clone().lerp(src[i], f);
+  };
+  const out: THREE.Vector3[] = [];
+  for (let k = 0; k < n; k++) out.push(at(THREE.MathUtils.lerp(s0, s1, k / (n - 1))));
+  return out;
+}
+
+/** Densify a 12-node lock path with Catmull-Rom so later resampling follows the curve, not its chords. */
+function densifyPath(pts: THREE.Vector3[], per = 6): THREE.Vector3[] {
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  return curve.getPoints(Math.max(2, (pts.length - 1) * per));
+}
+
+/** Stylised clumping: greedily groups locks by tip position (within `radius`) and blends each lock's tail toward its
+ *  clump's mean path (weight `strength` * t^2 from node `fromNode`), so tapered tips gather into soft points instead of comb teeth. */
+function clumpTips(paths: THREE.Vector3[][], radius: number, strength: number, fromNode = 5): void {
+  const clusters: { c: THREE.Vector3; members: number[] }[] = [];
+  paths.forEach((pts, i) => {
+    const tip = pts[pts.length - 1];
+    let best = -1, bd = radius;
+    clusters.forEach((cl, j) => { const d = cl.c.distanceTo(tip); if (d < bd) { bd = d; best = j; } });
+    if (best < 0) clusters.push({ c: tip.clone(), members: [i] });
+    else { const cl = clusters[best]; cl.members.push(i); cl.c.multiplyScalar(cl.members.length - 1).add(tip).divideScalar(cl.members.length); }
+  });
+  for (const cl of clusters) {
+    if (cl.members.length < 2) continue;
+    const n = paths[cl.members[0]].length;
+    const mean: THREE.Vector3[] = [];
+    for (let k = 0; k < n; k++) {
+      const m = new THREE.Vector3();
+      cl.members.forEach((i) => m.add(paths[i][k]));
+      mean.push(m.divideScalar(cl.members.length));
+    }
+    for (const i of cl.members) {
+      for (let k = fromNode; k < n; k++) {
+        const t = (k - fromNode + 1) / (n - fromNode);
+        paths[i][k].lerp(mean[k], strength * t * t);
+      }
+    }
+  }
 }
 
 export const CURATED_HAIR_PALETTES: CuratedHairPalette[] = [
@@ -3471,6 +3707,375 @@ if (arch === 'twin-buns') {
 }
   // ARCH-END twin-buns
 
+  // ARCH-BEGIN curtain-part
+  if (arch === 'curtain-part') {
+    // CP: centre-parted curtain fringe, medium layered length. Top hair is combed sideways off the part along
+    // part-centred meridians (lifted at the root for the curtain arch), released near the temple/ear and dropped with
+    // gravity + body collision. Back hair is a 3-layer layered curtain to the nape. Narrow round smoothed locks throughout.
+    const partYaw = THREE.MathUtils.clamp(config.partPosition, -1, 1) * 0.1;
+    const curtainY = THREE.MathUtils.lerp(0.3, 0.08, config.bangsLength);
+    const sideY = THREE.MathUtils.lerp(0.14, -0.04, config.sideLength);
+    const backY = THREE.MathUtils.lerp(0.0, -0.2, config.backLength);
+    const cpRand = seededRand((config.seed || 1) * 3 + 17);
+    const eqY = HEAD_CENTER_LOCAL.y + Math.cos(1.75) * SCALP_RY;
+    const phiForY = (y: number) => 1.75 + Math.max(0, eqY - y) / 0.325;
+    const jag = 0.02 + shag * 0.05;
+
+    // Zone 1: hidden skull-hugging shell (3 staggered tiers), ends under the hairline at the front and above the ears
+    for (let tier = 0; tier < 3; tier++) {
+      const count = 26;
+      for (let i = 0; i < count; i++) {
+        const theta = ((i + tier * 0.33) / count) * Math.PI * 2;
+        const aT = Math.abs(Math.atan2(Math.sin(theta), Math.cos(theta)));
+        const lim = aT < 0.9 ? 1.2 : aT < 1.95 ? THREE.MathUtils.lerp(1.3, 1.58, (aT - 0.9) / 1.05) : THREE.MathUtils.lerp(1.7, 2.05, (aT - 1.95) / (Math.PI - 1.95));
+        const phiStart = tier === 0 ? 0.02 : 0.25 + tier * 0.35;
+        if (phiStart > lim - 0.2) continue;
+        const pts = buildSculptedLock({ thetaStart: theta, thetaEnd: theta, phiStart, phiEnd: lim, baseLift: 0.003, midArch: 0.003, tipFlickOut: 0, napeHug: 1.0 });
+        pts.forEach((p, n) => n > 0 && clearOfBody(p, 0.003));
+        specs.push({ smooth: 3, pointsLocal: pts, width: 0.085 * wMul, thickness: 0.01, stiffnessBias: 0.85, layerAO: 0.7, layerOrder: 0, isBaseShell: true, lockNormal: false, scalpRoot: tier === 0 ? 0.48 : 0.25 });
+      }
+    }
+
+    // Zone 2: back + behind-ear layers (crown whorl -> nape), outer layers shorter for a soft layered hem
+    const backLayers = [
+      { n: 64, w: 0.05, dr: 0.004, ord: 1 },
+      { n: 92, w: 0.04, dr: 0.012, ord: 2 },
+      { n: 104, w: 0.034, dr: 0.02, ord: 3 },
+    ];
+    const z2Start = specs.length;
+    // hem clumps: neighbouring locks share a length and pull their tips together (soft anime points, no comb teeth)
+    const nClumps = 15;
+    const clumpLen = Array.from({ length: nClumps + 1 }, () => (cpRand() - 0.5) * jag * 2.2);
+    for (const L of backLayers) {
+      const cnt = Math.round(L.n * density);
+      for (let i = 0; i < cnt; i++) {
+        const u = THREE.MathUtils.clamp((i + (cpRand() - 0.5) * 0.4) / (cnt - 1), 0, 1);
+        const theta = THREE.MathUtils.lerp(1.5, Math.PI * 2 - 1.5, u);
+        const cu = (u * nClumps + L.ord * 0.31) % (nClumps + 1);
+        const ci = Math.floor(cu);
+        const cIn = cu - ci - 0.5; // -0.5..0.5 inside its clump
+        const aT = Math.abs(Math.atan2(Math.sin(theta), Math.cos(theta)));
+        const k = THREE.MathUtils.clamp((aT - 1.5) / (Math.PI - 1.5), 0, 1);
+        const endY = THREE.MathUtils.lerp(sideY + 0.03, backY, k * k * (3 - 2 * k)) + (L.ord - 1) * 0.03 + clumpLen[ci] + Math.abs(cIn) * 0.05 + (cpRand() - 0.5) * 0.01;
+        const tipPull = -cIn * (Math.PI * 2 - 3) / nClumps * 0.55;
+        const pts = buildSculptedLock({
+          thetaStart: theta, thetaEnd: theta + tipPull + (cpRand() - 0.5) * 0.01 - Math.sign(Math.sin(theta)) * (1 - k) * 0.06,
+          phiStart: 0.04 + (L.ord - 1) * 0.07 + cpRand() * 0.06, phiEnd: phiForY(endY),
+          baseLift: 0.004 + L.ord * 0.003, midArch: 0.004 + config.crownVolume * 0.006, tipFlickOut: 0.004, napeHug: 0.7,
+        });
+        // radial layering, then keep clear of ears, neck and face
+        for (let n = 1; n < pts.length; n++) {
+          const p = pts[n];
+          const dx = p.x - HEAD_CENTER_LOCAL.x, dz = p.z - HEAD_CENTER_LOCAL.z;
+          const len = Math.max(1e-4, Math.hypot(dx, dz));
+          const kk = L.dr * Math.min(1, n / 4) / len;
+          p.x += dx * kk; p.z += dz * kk;
+          clearOfBody(p, 0.006 + L.ord * 0.003);
+        }
+        specs.push({
+          smooth: 3, roundness: 0.65, pointsLocal: pts, width: L.w * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+          stiffnessBias: 0.78, layerAO: 0.8 + L.ord * 0.05, layerOrder: L.ord, lockNormal: false, scalpRoot: 0.4,
+        });
+      }
+    }
+
+    clumpTips(specs.slice(z2Start).filter((sp) => sp.layerOrder >= 2).map((sp) => sp.pointsLocal), 0.045, 0.5);
+
+    // Zone 3: top hair combed off the centre part; front locks become the curtains framing the face
+    const z3Start = specs.length;
+    for (const sd of [-1, 1]) {
+      for (let row = 0; row < 3; row++) {
+        const n = Math.round(46 * density);
+        for (let i = 0; i < n; i++) {
+          const f = (i + row * 0.33 + (cpRand() - 0.5) * 0.3) / (n - 1);
+          const b0 = THREE.MathUtils.lerp(-0.65, 1.25, THREE.MathUtils.clamp(f, 0, 1));
+          const ff = _ss((b0 - 0.55) / 0.6); // 1 at the hairline (curtain), 0 at the crown
+          const ffc = _ss((b0 - 0.92) / 0.3); // front-most: the curtain wings that arch over the forehead corners
+          const aR = THREE.MathUtils.lerp(THREE.MathUtils.lerp(1.24, 0.9, ff), 0.74 + row * 0.04, ffc) + (cpRand() - 0.5) * 0.06;
+          const bR = b0 + ff * 0.14 + ffc * 0.16 - (1 - ff) * 0.06;
+          const from = partDir(sd * (0.01 + row * 0.008), b0, partYaw);
+          const to = partDir(sd * aR, bR, partYaw);
+          const bump = (0.01 + 0.022 * config.crownVolume) * (0.12 + 0.88 * ff) * (row === 0 ? 0.6 : 1);
+          const lift0 = 0.004 + row * 0.003, lift1 = 0.012 + row * 0.008 + ffc * 0.012;
+          const pts = skullArc(from, to, 7, (u) => THREE.MathUtils.lerp(lift0, lift1, u) + bump * Math.sin(Math.PI * Math.min(1, u * 1.35)));
+          const rel = pts[pts.length - 1];
+          const endY = THREE.MathUtils.lerp(sideY, curtainY, ff) + row * 0.02 * (1 - ff) + (cpRand() - 0.5) * jag * (1 - 0.5 * ff);
+          const out = new THREE.Vector3(rel.x - HEAD_CENTER_LOCAL.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize().lerp(new THREE.Vector3(sd, 0, 0), ffc * 0.5).normalize();
+          gravityFall(pts, 5, Math.max(0.04, (rel.y - endY) * (1.06 + ffc * 0.1)), {
+            out, flare: 0.05 + 0.05 * ff + 0.04 * ffc, bend: 0.42, margin: 0.008 + row * 0.006 + ffc * 0.01, flick: 0.01 * ff + 0.004,
+          });
+          specs.push({
+            smooth: 3, roundness: 0.65, pointsLocal: pts, width: (0.034 - row * 0.002) * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+            stiffnessBias: 0.8, layerAO: 0.84 + row * 0.05, layerOrder: 4 + row, lockNormal: false, scalpRoot: 0.42,
+          });
+        }
+      }
+    }
+
+    clumpTips(specs.slice(z3Start).map((sp) => sp.pointsLocal), 0.05, 0.72);
+
+    // Zone 3b: temple + sideburn cover in front of the ear, tucked under the curtains
+    sideburnLocks(specs, { sideburnLength: 0.8, count: 8, width: 0.028 * wMul, layerOrder: 2, baseLift: 0.006 });
+    for (const sd of [-1, 1]) {
+      for (let k = 0; k < 14; k++) {
+        const th = sd * (0.82 + (k / 13) * 0.85);
+        const from = scalpDir(th * 0.9, 0.85 + (k % 3) * 0.1);
+        const to = scalpDir(th, 1.45);
+        const pts = skullArc(from, to, 6, (u) => 0.008 + 0.006 * u);
+        const rel = pts[pts.length - 1];
+        const out = new THREE.Vector3(rel.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
+        gravityFall(pts, 6, Math.max(0.04, rel.y - (sideY + 0.04 + (cpRand() - 0.5) * jag)), { out, flare: 0.04, bend: 0.5, margin: 0.01 });
+        specs.push({
+          smooth: 3, roundness: 0.6, pointsLocal: pts, width: 0.04 * wMul, thickness: 0.011,
+          stiffnessBias: 0.8, layerAO: 0.8, layerOrder: 2, lockNormal: false, scalpRoot: 0.4,
+        });
+      }
+    }
+
+    // Zone 4: a few fine face-framing strands at the inner curtain edge (realism accent)
+    for (const sd of [-1, 1]) {
+      for (let k = 0; k < 4; k++) {
+        const b0 = 1.0 + k * 0.05;
+        const from = partDir(sd * 0.04, b0, partYaw);
+        const to = partDir(sd * (0.72 + k * 0.06), b0 + 0.28, partYaw);
+        const pts = skullArc(from, to, 6, (u) => 0.026 + 0.03 * Math.sin(Math.PI * Math.min(1, u * 1.2)));
+        const rel = pts[pts.length - 1];
+        const out = new THREE.Vector3(rel.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
+        gravityFall(pts, 6, Math.max(0.05, rel.y - curtainY - 0.02 + k * 0.03), { out, flare: 0.1, bend: 0.3, margin: 0.03, flick: 0.012 });
+        specs.push({
+          smooth: 3, roundness: 0.7, pointsLocal: pts, width: 0.016 * wMul, thickness: 0.007,
+          stiffnessBias: 0.6, layerAO: 0.95, layerOrder: 7, lockNormal: false, scalpRoot: 0.3,
+        });
+      }
+    }
+    return specs;
+  }
+  // ARCH-END curtain-part
+
+  // ARCH-BEGIN rope-locs
+  if (arch === 'rope-locs') {
+    // RL: shoulder-length locs. Each loc is a thick round rope, rooted on a jittered sphere grid inside the hairline,
+    // laid over the skull (front/top ones parted off the centre, back ones down the back), then dropped with gravity.
+    // Each loc is one round lock (roundness 1) with the per-lock tip shape (tipStart / tipWidth): full width almost to the
+    // end, then a rounded cap, instead of the default pointed hair tip; ripple adds the knotted rope texture of a loc.
+    const partYaw = THREE.MathUtils.clamp(config.partPosition, -1, 1) * 0.1;
+    const rlRand = seededRand((config.seed || 1) * 13 + 5);
+    const frontY = THREE.MathUtils.lerp(0.06, -0.12, config.bangsLength);
+    const sideY = THREE.MathUtils.lerp(-0.06, -0.22, config.sideLength);
+    const backY = THREE.MathUtils.lerp(-0.14, -0.38, config.backLength);
+    const hairCut = (th: number) => earAlignedCutPhi(th, { hairlinePhi: 1.3, sideburnLength: 0.55, napePhi: 2.06, templeRecede: 0 });
+    const locW = 0.034 * wMul;
+
+    // Zone 1: dense hidden shell, so the partings between loc roots never show bare scalp
+    for (let tier = 0; tier < 4; tier++) {
+      const count = 28;
+      for (let i = 0; i < count; i++) {
+        const theta = ((i + tier * 0.25) / count) * Math.PI * 2;
+        const aT = Math.abs(Math.atan2(Math.sin(theta), Math.cos(theta)));
+        // temples: the face lathe's hairline sits lower than the cut curve between brow and ear, so the shell runs further down
+        const lim = hairCut(theta) + 0.06 + 0.16 * Math.exp(-(((aT - 1.35) / 0.35) ** 2));
+        const phiStart = tier === 0 ? 0.02 : 0.2 + tier * 0.3;
+        if (phiStart > lim - 0.18) continue;
+        const pts = buildSculptedLock({ thetaStart: theta, thetaEnd: theta, phiStart, phiEnd: lim, baseLift: 0.003, midArch: 0.003, tipFlickOut: 0, napeHug: 1.1 });
+        pts.forEach((p, n) => n > 0 && clearOfBody(p, 0.003));
+        specs.push({ smooth: 3, pointsLocal: pts, width: (aT > 1.4 && aT < 2.1 ? 0.06 : 0.085) * wMul, thickness: 0.01, stiffnessBias: 0.9, layerAO: 0.6, layerOrder: 0, isBaseShell: true, lockNormal: false, scalpRoot: tier === 0 ? 0.48 : 0.25 });
+      }
+    }
+
+    // Zone 1b: temple and sideburn cover, so the locs falling past the face never show scalp in front of the ear
+    sideburnLocks(specs, { sideburnLength: 0.8, count: 9, width: 0.03 * wMul, layerOrder: 1, baseLift: 0.006 });
+
+    // Zone 2: the locs
+    const total = Math.round(330 * density); // sphere samples; about 40% land inside the hairline
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const locPaths: { pts: THREE.Vector3[]; depth: number; w: number }[] = [];
+    const roots: [number, number][] = [];
+    for (let i = 0; i < total; i++) {
+      const yN = 1 - (i + 0.5) / total * 2;
+      const phi0 = Math.acos(yN) + (rlRand() - 0.5) * 0.05;
+      const theta0 = i * golden + (rlRand() - 0.5) * 0.08;
+      if (phi0 > hairCut(theta0) - 0.16 || phi0 < 0.03) continue;
+      roots.push([theta0, phi0]);
+    }
+    // hairline row: locs rooted right on the hairline so the edge reads as locs, not shell
+    for (let a = -Math.PI; a < Math.PI; a += 0.115) {
+      const th = a + (rlRand() - 0.5) * 0.03;
+      roots.push([th, hairCut(th) - 0.025 + (rlRand() - 0.5) * 0.02]);
+    }
+    for (const [theta0, phi0] of roots) {
+      const d0 = scalpDir(theta0, phi0);
+      // part-centred coordinates of the root (rotated by the part yaw)
+      const c = Math.cos(partYaw), s = Math.sin(partYaw);
+      const px = d0.x * c - d0.z * s, pz = d0.x * s + d0.z * c;
+      const alpha0 = Math.asin(THREE.MathUtils.clamp(px, -1, 1));
+      const beta0 = Math.atan2(pz, d0.y);
+      const sd = alpha0 >= 0 ? 1 : -1;
+      const ff = _ss((beta0 - 0.5) / 0.8);
+      const partTo = partDir(sd * Math.max(Math.abs(alpha0) + 0.15, THREE.MathUtils.lerp(1.2, 0.95, ff)), beta0 + ff * 0.12, partYaw);
+      const backTo = scalpDir(theta0, Math.max(phi0 + 0.1, 1.72));
+      const wBack = _ss((-beta0 - 0.05) / 0.45);
+      const to = slerpDir(partTo, backTo, wBack);
+      const arcAng = Math.acos(THREE.MathUtils.clamp(d0.dot(to), -1, 1));
+      // locs rooted higher lie on top of the ones they pass over
+      const depth = THREE.MathUtils.clamp(arcAng / 1.1, 0, 1.4);
+      const lift0 = locW * 0.42, lift1 = locW * 0.5 + 0.034 * depth + config.crownVolume * 0.012 * depth;
+      const pts = skullArc(d0, to, 5, (u) => THREE.MathUtils.lerp(lift0, lift1, _ss(u * 1.3)), 0.004);
+      const rel = pts[pts.length - 1];
+      const aT = Math.abs(Math.atan2(rel.x, rel.z - HEAD_CENTER_LOCAL.z));
+      const kSide = _ss((aT - 0.6) / 1.2), kBack = _ss((aT - 1.9) / 1.0);
+      const endY = THREE.MathUtils.lerp(THREE.MathUtils.lerp(frontY, sideY, kSide), backY, kBack) + (rlRand() - 0.5) * (0.04 + shag * 0.08);
+      const out = new THREE.Vector3(rel.x - HEAD_CENTER_LOCAL.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
+      const sway = new THREE.Vector3(-out.z, 0, out.x);
+      gravityFall(pts, 7, Math.max(0.06, rel.y - endY), {
+        out, flare: 0.025 + 0.015 * depth, bend: 0.42, margin: lift1 * 0.8 + 0.006,
+        sway, swayAmp: 0.012 + rlRand() * 0.012, swayPhase: rlRand() * 6.28,
+      });
+      locPaths.push({ pts, depth, w: locW * (0.86 + rlRand() * 0.28) });
+    }
+    // temple locs: rooted above the temple and hugging the side of the face, so no scalp shows between brow and ear
+    for (const sd of [-1, 1]) {
+      for (let k = 0; k < 10; k++) {
+        const th = sd * (0.85 + (k / 9) * 0.8);
+        const from = scalpDir(th * 0.92, 0.95 + (k % 3) * 0.1);
+        const to = scalpDir(th, 1.5);
+        const pts = skullArc(from, to, 5, (u) => locW * 0.45 + 0.006 * u);
+        const rel = pts[pts.length - 1];
+        const out = new THREE.Vector3(rel.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
+        gravityFall(pts, 7, Math.max(0.05, rel.y - (sideY + 0.03 + (rlRand() - 0.5) * 0.06)), { out, flare: 0.02, bend: 0.5, margin: locW * 0.5 + 0.004 });
+        locPaths.push({ pts, depth: 0.15, w: locW * (0.8 + rlRand() * 0.2) });
+      }
+    }
+    // deeper (higher-rooted) locs render on top
+    for (const L of locPaths) {
+      const pts = bluntLockPoints(L.pts, L.w * 0.3);
+      let len = 0;
+      for (let n = 1; n < pts.length; n++) len += pts[n].distanceTo(pts[n - 1]);
+      specs.push({
+        smooth: 4, roundness: 1.0, tipStart: 0.86, tipWidth: 0.62 + rlRand() * 0.1,
+        ripple: 0.16 + rlRand() * 0.1, rippleFreq: THREE.MathUtils.clamp(len / 0.032, 5, 12),
+        pointsLocal: pts, width: L.w, thickness: L.w * 0.9,
+        stiffnessBias: 0.92, layerAO: 0.7 + 0.25 * Math.min(1, L.depth), layerOrder: 1 + Math.min(4, Math.round(L.depth * 3)),
+        lockNormal: false, scalpRoot: 0.6,
+      });
+    }
+    return specs;
+  }
+  // ARCH-END rope-locs
+
+  // ARCH-BEGIN coily-afro
+  if (arch === 'coily-afro') {
+    // CC: a rounded coily afro. The silhouette is a volume (an offset of the scalp, thickest on top), filled with
+    // round coiled clumps: each rises from its root out through the volume, then runs a few cm along the outer surface
+    // (back and down, away from the face). coilLockPoints winds each clump into a helix, ripple adds the kink texture,
+    // and the tip shape gives round clump ends instead of points, so the surface reads dense and soft, never spiky.
+    const caRand = seededRand((config.seed || 1) * 17 + 3);
+    const hairCut = (th: number) => earAlignedCutPhi(th, { hairlinePhi: 1.26, sideburnLength: 0.45, napePhi: 2.0, templeRecede: 0.04 });
+    const vol = THREE.MathUtils.lerp(0.8, 1.2, config.crownVolume);
+    const clumpW = 0.032 * wMul;
+    const up = new THREE.Vector3(0, 1, 0);
+    // afro thickness above the scalp along a direction: thick on top, less at the sides, thin at the nape and the hairline
+    const thickAt = (dir: THREE.Vector3) => {
+      const phi = Math.acos(THREE.MathUtils.clamp(dir.y, -1, 1));
+      const theta = Math.atan2(dir.x, dir.z);
+      const aT = Math.abs(theta);
+      const top = THREE.MathUtils.lerp(0.125, 0.085, _ss((phi - 0.5) / 1.0));
+      const nape = 1 - 0.45 * _ss((phi - 1.6) / 0.4) * _ss((aT - 1.8) / 0.8);
+      const edge = THREE.MathUtils.lerp(0.45, 1, _ss((hairCut(theta) - phi) / 0.4));
+      return top * nape * edge * vol;
+    };
+    const dirOf = (p: THREE.Vector3) => new THREE.Vector3((p.x - HEAD_CENTER_LOCAL.x) / SCALP_RX, (p.y - HEAD_CENTER_LOCAL.y) / SCALP_RY, (p.z - HEAD_CENTER_LOCAL.z) / SCALP_RZ).normalize();
+
+    // Zone 1: hidden shell on the scalp
+    for (let tier = 0; tier < 4; tier++) {
+      const count = 28;
+      for (let i = 0; i < count; i++) {
+        const theta = ((i + tier * 0.25) / count) * Math.PI * 2;
+        const aT = Math.abs(Math.atan2(Math.sin(theta), Math.cos(theta)));
+        const lim = Math.max(hairCut(theta) + 0.1 + 0.22 * Math.exp(-(((aT - 1.3) / 0.6) ** 2)), scalpRegionPhi(aT) + 0.1); // down to the ear top
+        const phiStart = tier === 0 ? 0.02 : 0.2 + tier * 0.3;
+        if (phiStart > lim - 0.18) continue;
+        const pts = buildSculptedLock({ thetaStart: theta, thetaEnd: theta, phiStart, phiEnd: lim, baseLift: 0.003, midArch: 0.003, tipFlickOut: 0, napeHug: 1.1 });
+        pts.forEach((p, n) => n > 0 && clearOfBody(p, 0.003));
+        specs.push({ smooth: 3, tipStart: 0.8, tipWidth: 0.6, pointsLocal: pts, width: 0.085 * wMul, thickness: 0.01, stiffnessBias: 0.95, layerAO: 0.5, layerOrder: 0, isBaseShell: true, lockNormal: false, scalpRoot: tier === 0 ? 0.48 : 0.25 });
+      }
+    }
+
+    // Zone 2: coiled clumps through the volume. Fibonacci roots inside the hairline; depth decides inner filler vs surface
+    const total = Math.round(920 * density);
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < total; i++) {
+      const yN = 1 - (i + 0.5) / total * 2;
+      const phi0 = Math.acos(yN) + (caRand() - 0.5) * 0.03;
+      const theta0 = i * golden + (caRand() - 0.5) * 0.05;
+      if (phi0 > hairCut(theta0) - 0.03 || phi0 < 0.02) continue;
+      const d0 = scalpDir(theta0, phi0);
+      const T = thickAt(d0);
+      const depthF = 0.55 + 0.47 * Math.pow(caRand(), 0.6); // most clumps reach the outer surface
+      // rise: out of the scalp. Upper clumps lean up (afros lift off the head); low ones (temples, over the ears, nape)
+      // lean down and run further down so the volume wraps the lower head instead of stopping at a ledge
+      const low = _ss((phi0 - 1.3) / 0.4);
+      const lean = 0.3 * (1 - _ss((phi0 - 1.0) / 0.5)) - 0.35 * _ss((phi0 - 1.45) / 0.35);
+      const outDir = d0.clone().addScaledVector(up, lean).normalize();
+      const center: THREE.Vector3[] = [scalpDirPoint(d0, 0.004)];
+      const riseEnd = clearOfBody(scalpDirPoint(d0, 0).addScaledVector(outDir, T * depthF), 0.01);
+      for (let k = 1; k <= 3; k++) center.push(clearOfBody(center[0].clone().lerp(riseEnd, k / 3), 0.006));
+      // run along the outer surface, back and down (away from the face)
+      const dEnd = dirOf(riseEnd);
+      const flowW = new THREE.Vector3(0, -1, -0.7 * (1 - low));
+      const flow = flowW.sub(dEnd.clone().multiplyScalar(flowW.dot(dEnd)));
+      if (flow.lengthSq() < 1e-6) flow.set(0, 0, -1);
+      flow.normalize().applyAxisAngle(dEnd, (caRand() - 0.5) * 1.6 * (1 - 0.6 * low));
+      const runAng = (0.1 + caRand() * 0.16) * (0.7 + 0.3 * vol) * (1 + 0.8 * low);
+      for (let k = 1; k <= 4; k++) {
+        const u = k / 4;
+        const dir = dEnd.clone().applyAxisAngle(new THREE.Vector3().crossVectors(dEnd, flow).normalize(), runAng * u);
+        const lift = thickAt(dir) * Math.min(1.02, depthF + 0.06 * u) + 0.004;
+        center.push(clearOfBody(scalpDirPoint(dir, lift), 0.01));
+      }
+      let len = 0;
+      for (let k = 1; k < center.length; k++) len += center[k].distanceTo(center[k - 1]);
+      const w = clumpW * (0.8 + caRand() * 0.4);
+      const pts = coilLockPoints(center, 0.006 + caRand() * 0.006, Math.min(2.5, len / 0.045), caRand() * 6.28, w * 0.3, 0.25);
+      pts.forEach((p, n) => n > 0 && clearOfBody(p, 0.004));
+      const surf = depthF > 0.85;
+      specs.push({
+        smooth: 3, roundness: 1.0, tipStart: 0.8, tipWidth: 0.55 + caRand() * 0.15,
+        ripple: 0.22 + caRand() * 0.14, rippleFreq: THREE.MathUtils.clamp(len / 0.022, 5, 11),
+        pointsLocal: pts, width: surf ? w : w * 1.2, thickness: (surf ? w : w * 1.2) * 0.9,
+        stiffnessBias: 1.0, layerAO: surf ? 0.75 + caRand() * 0.25 : 0.45, layerOrder: surf ? 2 + Math.round(depthF * 2) : 1,
+        lockNormal: false, scalpRoot: 0.55,
+      });
+    }
+    // Zone 3: temple and over-ear wrap. Short coils hugging the side of the head from the temple back over the ear,
+    // where the head mesh sits outside the scalp shell and the volume clumps lift away
+    for (const sd of [-1, 1]) {
+      for (let row = 0; row < 2; row++) {
+        const n = 18;
+        for (let k = 0; k < n; k++) {
+          const th = sd * (0.6 + (k / (n - 1)) * 1.4 + row * 0.04);
+          const cut = hairCut(th);
+          const from = scalpDir(th, cut - 0.32 + row * 0.12);
+          const to = scalpDir(th * 1.03, Math.min(1.9, cut + 0.24 + row * 0.04 + 0.18 * Math.exp(-(((Math.abs(th) - 1.3) / 0.6) ** 2))));
+          const lift0 = 0.01 + row * 0.006, lift1 = 0.02 + row * 0.012 + caRand() * 0.01;
+          const center = skullArc(from, to, 6, (u) => THREE.MathUtils.lerp(lift0, lift1, u), 0.008);
+          let len = 0;
+          for (let q = 1; q < center.length; q++) len += center[q].distanceTo(center[q - 1]);
+          const w = clumpW * (0.75 + caRand() * 0.3);
+          const pts = coilLockPoints(center, 0.005 + caRand() * 0.004, Math.min(2.5, len / 0.04), caRand() * 6.28, w * 0.3, 0.2);
+          pts.forEach((p, q) => q > 0 && clearOfBody(p, 0.006));
+          specs.push({
+            smooth: 3, roundness: 1.0, tipStart: 0.8, tipWidth: 0.55 + caRand() * 0.15,
+            ripple: 0.25, rippleFreq: THREE.MathUtils.clamp(len / 0.022, 4, 10),
+            pointsLocal: pts, width: w, thickness: w * 0.9,
+            stiffnessBias: 1.0, layerAO: 0.7 + caRand() * 0.2, layerOrder: 2 + row, lockNormal: false, scalpRoot: 0.5,
+          });
+        }
+      }
+    }
+    return specs;
+  }
+  // ARCH-END coily-afro
+
   // ZONE A: Seamless 360° Inner Foundation Shell (phiStart = 0.01 seals crown apex 100%)
   // =========================================================================
   for (let tier = 0; tier < 4; tier++) {
@@ -4167,6 +4772,9 @@ const ARCHETYPE_PRESET_MAP: Record<HairBuilderArchetype, HairPresetId> = {
   'braided-crown': 'crimson',
   'wavy-bard': 'crimson',
   'samurai-topknot': 'noctis',
+  'curtain-part': 'leon',
+  'rope-locs': 'noctis',
+  'coily-afro': 'noctis',
 };
 
 function buildArchetypeParameters(archetype: HairBuilderArchetype, rand: () => number, seed: number): HairBuilderConfig {
@@ -4515,6 +5123,51 @@ function buildArchetypeParameters(archetype: HairBuilderArchetype, rand: () => n
         backLength: rRange(0.52, 0.82),
         layerShag: rRange(0.48, 0.82),
         density: rRange(0.96, 1.12),
+        strandWidth: rRange(0.92, 1.08),
+        seed,
+      };
+    case 'curtain-part':
+      return {
+        archetype,
+        partPosition: rRange(-0.12, 0.12),
+        bangsLength: rRange(0.32, 0.72),
+        bangsSweep: 0,
+        crownVolume: rRange(0.35, 0.75),
+        spikeLift: 0,
+        sideLength: rRange(0.3, 0.7),
+        backLength: rRange(0.3, 0.7),
+        layerShag: rRange(0.25, 0.6),
+        density: rRange(1.0, 1.15),
+        strandWidth: rRange(0.92, 1.06),
+        seed,
+      };
+    case 'rope-locs':
+      return {
+        archetype,
+        partPosition: rRange(-0.15, 0.15),
+        bangsLength: rRange(0.4, 0.8),
+        bangsSweep: 0,
+        crownVolume: rRange(0.4, 0.8),
+        spikeLift: 0,
+        sideLength: rRange(0.45, 0.9),
+        backLength: rRange(0.5, 0.95),
+        layerShag: rRange(0.3, 0.7),
+        density: rRange(0.95, 1.12),
+        strandWidth: rRange(0.92, 1.08),
+        seed,
+      };
+    case 'coily-afro':
+      return {
+        archetype,
+        partPosition: 0,
+        bangsLength: rRange(0.2, 0.5),
+        bangsSweep: 0,
+        crownVolume: rRange(0.45, 0.9),
+        spikeLift: 0,
+        sideLength: rRange(0.3, 0.7),
+        backLength: rRange(0.3, 0.7),
+        layerShag: rRange(0.3, 0.7),
+        density: rRange(1.0, 1.15),
         strandWidth: rRange(0.92, 1.08),
         seed,
       };

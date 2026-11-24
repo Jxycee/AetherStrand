@@ -262,9 +262,12 @@ namespace AetherStrand
                     double rootTuck = isBase ? 0.88 + 0.12 * rSin : rootMinW + (1.0 - rootMinW) * rSin;
                     double rootThickTuck = isBase ? 1.0 : 0.2 + 0.8 * rSin;
                     bool isFade = lk.isFadeCap;
-                    double tipTaper = isFade ? 1.0 : (isBase ? (sm > 1 ? sBT : BaseTipTaper[k]) : (sm > 1 ? sTT : TipTaper[k]));
+                    bool customTip = !isFade && (lk.tipWidth > 0 || !double.IsNaN(lk.tipStart) || lk.ripple > 0);
+                    double ctW = 1, ctT = 1;
+                    if (customTip) TipShape(sm > 1 ? sTF : TipFactor[k], lk.tipStart, lk.tipWidth, lk.ripple, lk.rippleFreq, out ctW, out ctT);
+                    double tipTaper = isFade ? 1.0 : (customTip ? ctW : (isBase ? (sm > 1 ? sBT : BaseTipTaper[k]) : (sm > 1 ? sTT : TipTaper[k])));
                     double halfW = baseHalfW * rootTuck * tipTaper;
-                    double halfT = isFade ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? sTF : TipFactor[k]) * 0.65) : baseHalfT * rootThickTuck * (sm > 1 ? sTP : ThickPow[k]);
+                    double halfT = isFade ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? sTF : TipFactor[k]) * 0.65) : baseHalfT * rootThickTuck * (customTip ? ctT : (sm > 1 ? sTP : ThickPow[k]));
                     if (round > 0 && !isFade && !isBase) halfT += (halfW * 0.9 * rootThickTuck - halfT) * round;
 
                     for (int r = 0; r < RingVerts; r++)
@@ -293,6 +296,37 @@ namespace AetherStrand
             mesh.SetNormals(norms);
             mesh.SetTangents(tans);
             mesh.RecalculateBounds();
+        }
+
+        /// <summary>Per-lock tip shape, mirror of computeTipShape in hairPhysics.ts (mesh only).</summary>
+        static void TipShape(double t, double tipStart, double tipWidth, double ripple, double rippleFreq, out double w, out double th)
+        {
+            double s = double.IsNaN(tipStart) ? 0.44 : System.Math.Min(0.97, System.Math.Max(0.2, tipStart));
+            double tw = System.Math.Min(0.9, System.Math.Max(0.0, tipWidth));
+            t = System.Math.Min(1.0, t * (AetherStrandWebSolver.N - 1) / (double)(AetherStrandWebSolver.N - 2)); // last ring = node N-2; tip vertex closes at N-1
+            double u = t < s ? t * 0.44 / s : 0.44 + ((t - s) / (1 - s)) * 0.56;
+            w = System.Math.Max(0.06, u < 0.44 ? 1.0 - u * 0.14 : System.Math.Pow((1.0 - u) / 0.56, 0.94) * 0.938);
+            th = System.Math.Pow(System.Math.Max(0.04, 1.0 - u), 0.86);
+            if (tw > 0)
+            {
+                w = tw + (1 - tw) * w;
+                th = tw + (1 - tw) * th;
+                const double cap = 0.07;
+                if (t > 1 - cap)
+                {
+                    double c = (t - (1 - cap)) / cap;
+                    double f = 0.55 + 0.45 * System.Math.Sqrt(System.Math.Max(0.0, 1 - c * c));
+                    w *= f; th *= f;
+                }
+            }
+            double rp = System.Math.Min(0.45, System.Math.Max(0.0, ripple));
+            if (rp > 0)
+            {
+                double fq = System.Math.Max(1.0, rippleFreq);
+                double rf = System.Math.Min(1.0, System.Math.Max(0.0, (t - 0.04) / 0.11));
+                double m = 1 - rp * 0.5 * (1 - System.Math.Cos(2 * System.Math.PI * fq * t)) * rf * rf * (3 - 2 * rf);
+                w *= m; th *= m;
+            }
         }
 
         /// <summary>Copy of the last vertex positions (hair space), for tests.</summary>

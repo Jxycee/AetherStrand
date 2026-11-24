@@ -46,6 +46,9 @@ namespace AetherStrand
             public double fadeStart = double.NaN;     // NaN: default fade curve (alpha 0.25)
             public int smooth = 1;                    // mesh-only Catmull-Rom subdivision 1..4 (solver stays at N nodes)
             public double roundness = 0;              // 0..1 tube-like cross-section blend
+            public double tipStart = double.NaN;      // NaN: legacy end taper (starts at 0.44)
+            public double tipWidth = 0;               // 0..0.9 width/thickness held to the end, rounded cap (locs, blunt cuts)
+            public double ripple = 0, rippleFreq = 9; // 0..0.45 periodic width bumps along the lock (locs, rope twists)
             public double[] rootNormal = { 0, 1, 0 }; // web head-local
         }
 
