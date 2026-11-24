@@ -51,6 +51,7 @@ interface VolumetricHairLock {
   layerAO: number;
   layerOrder: number;
   isBaseShell: boolean;
+  isFadeCap?: boolean;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -2414,6 +2415,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       layerAO: sp.layerAO,
       layerOrder: sp.layerOrder,
       isBaseShell: Boolean(sp.isBaseShell),
+      isFadeCap: Boolean((sp as any).isFadeCap),
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -3384,7 +3386,7 @@ export class HairPhysicsSystem {
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
       const baseVertex = s * vertsPerLock;
-      const maskVal = lock.isBaseShell ? 0.0 : 1.0;
+      const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? 0.25 : 1.0;
 
       for (let k = 0; k < ringsPerLock; k++) {
         const vCoord = k / (NODES_PER_LOCK - 1);
@@ -5133,9 +5135,12 @@ export class HairPhysicsSystem {
         const rSin = _NODE_ROOT_SIN[k];
         const rootTuck = isBase ? 0.88 + 0.12 * rSin : rootMinW + (1.0 - rootMinW) * rSin;
         const rootThickTuck = isBase ? 1.0 : 0.2 + 0.8 * rSin;
-        const tipTaper = isBase ? _NODE_BASE_TIP_TAPER[k] : _NODE_TIP_TAPER[k];
+        const isFade = lock.isFadeCap === true;
+        const tipTaper = isFade ? 1.0 : (isBase ? _NODE_BASE_TIP_TAPER[k] : _NODE_TIP_TAPER[k]);
         const halfW = baseHalfW * rootTuck * tipTaper;
-        const halfT = baseHalfT * rootThickTuck * _NODE_THICK_POW[k];
+        const halfT = isFade
+          ? baseHalfT * rootThickTuck * 0.55 * (1.0 - _NODE_TIP_FACTOR[k] * 0.65)
+          : baseHalfT * rootThickTuck * _NODE_THICK_POW[k];
 
         // 7-vertex crescent ring: zero per-vertex sqrt because (side, out) are orthonormal and (PROFILE_NX, PROFILE_NY) are unit!
         for (let r = 0; r < RING_VERTS; r++) {

@@ -198,6 +198,15 @@ const FRAGMENT_SHADER = /* glsl */ `
   void main() {
     float t = clamp(vUv.y, 0.0, 1.0);
 
+    // Mode 1: isFadeCap stubble (vCardMask ~0.25): stochastic stipple dissolves toward the hairline
+    if (vCardMask > 0.15 && vCardMask < 0.45) {
+      float fadeCov = pow(1.0 - smoothstep(0.25, 1.0, t), 0.75);
+      vec2 fadeCell = floor(vec2(vUv.x * 42.0 + floor(vStrandSeed * 255.0) / 255.0 * 17.0, t * 28.0));
+      float fadeNoise = fract(sin(dot(fadeCell, vec2(127.1, 311.7))) * 43758.5453);
+      float fadeIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+      if (fadeCov - mix(fadeNoise, fadeIgn, 0.55) < 0.0) discard;
+    }
+
     // Fine realistic multi-filament UVs scaled for slender sculpted 3D locks
     vec2 sampleUv = vec2(vUv.x * 0.92 + vStrandSeed * 3.13, t);
 
@@ -319,6 +328,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float grooveCrevice = mix(1.0, grooveAo, uGrooveDepth * 0.68);
     float domeGrad = mix(0.84, 1.08, smoothstep(-0.55, 0.68, headN.y));
     float totalAO = rootOcclusion * grooveCrevice * mix(0.72, 1.04, vLayerAO) * domeGrad;
+    if (vCardMask > 0.15 && vCardMask < 0.45) totalAO = mix(totalAO, 0.92, t * 0.70);
 
     // Balanced 360-degree Studio Softbox Diffuse with rich shadow depth
     vec3 LKey = normalize(uKeyDir);
