@@ -155,7 +155,7 @@ export default function App() {
     try {
       const text = await file.text();
       // Optional "chinY=<metres>" in the file name, e.g. Tobin_Head_chinY=1.5855.obj, overrides chin detection
-      const m = /chinY=([0-9.]+)/.exec(file.name);
+      const m = /chinY=(\d+(?:\.\d+)?)/.exec(file.name);
       setCharacterHead(loadCharacterHead(text, file.name.replace(/\.obj$/i, ''), m ? Number(m[1]) : undefined));
     } catch (err) {
       console.error('[AetherStrand] could not load head OBJ', err);
