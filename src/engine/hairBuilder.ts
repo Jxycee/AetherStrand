@@ -397,10 +397,10 @@ export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions =
       const az = -azMax + (i / n) * 2 * azMax + (rnd() - 0.5) * 0.03;
       const edge = 1 - _ss((Math.abs(az) - 0.6) / 0.5); // shorter and flatter toward the temples
       // clumps of 2-4 neighbours share a length and rise, so the edge reads as tufts rather than an even band
-      if (i === 0 || rnd() < 0.33) { rowL = 0.03 + 0.045 * rnd(); rowRise = 0.4 + 1.0 * rnd(); }
+      if (i === 0 || rnd() < 0.33) { rowL = 0.05 + 0.05 * rnd(); rowRise = 0.4 + 1.0 * rnd(); }
       const ph0 = o.hairlineRow(az) - 0.01 - rnd() * 0.03;
       const L = rowL * (0.85 + 0.3 * rnd()) * (0.6 + 0.4 * edge);
-      const rise = (0.012 + 0.016 * lift) * (0.5 + 0.5 * edge) * rowRise * (0.8 + 0.4 * rnd());
+      const rise = (0.016 + 0.022 * lift) * (0.5 + 0.5 * edge) * rowRise * (0.8 + 0.4 * rnd());
       const pts: THREE.Vector3[] = [];
       for (let k = 0; k < NODES_PER_LOCK; k++) {
         const t = k / (NODES_PER_LOCK - 1);
@@ -409,12 +409,15 @@ export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions =
         const a = az + sweep * 0.08 * t;
         const base = skullSurfacePoint(a, ph, 0);
         const nrm = skullSurfacePoint(a, ph, 1).sub(base).normalize();
-        const p = base.addScaledVector(nrm, 0.004 + rise * Math.sin(Math.PI * 0.5 * Math.min(1, t * 1.3)));
-        p.z += 0.01 * edge * Math.pow(t, 2);
+        // rise off the skin, steered upward over the forehead so the front stands up (seen from the front it reads as hair
+        // rising from the hairline, not a band lying on it)
+        const up = nrm.clone().lerp(new THREE.Vector3(0, 1, 0), 0.35 * edge).normalize();
+        const p = base.addScaledVector(up, 0.004 + rise * Math.sin(Math.PI * 0.5 * Math.min(1, t * 1.3)));
+        p.z += 0.012 * edge * Math.pow(t, 2);
         pts.push(p);
       }
       specs.push({
-        pointsLocal: pts, width: (0.018 + rnd() * 0.006) * wMul, thickness: 0.005, stiffnessBias: 0.97, layerAO: 0.85, layerOrder: 3,
+        pointsLocal: pts, width: (0.02 + rnd() * 0.008) * wMul, thickness: 0.005, stiffnessBias: 0.97, layerAO: 0.95, layerOrder: 3,
         smooth: 2, tipStart: 0.5, lockNormal: false, scalpRoot: 0.6,
       });
     }
@@ -2153,8 +2156,8 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
     // Zone 3: textured top (shared texturedTopLocks): pointed clumps growing from the crown whorl and flowing forward
     const undercutPaint = undercutFadePaint(config);
     texturedTopLocks(specs, {
-      seed: seedU + 33, wMul, sweep: sweepSign * 0.4, forward: 0.85, extentZ: 0.3, lenCrown: 0.13, lenFront: 0.16,
-      lift: 0.6 + 0.9 * config.crownVolume, spike: 0.5 + 0.8 * config.spikeLift, reach: 0.86, frontReach: 0.1, spacing: 0.052, width: 0.021,
+      seed: seedU + 33, wMul, sweep: sweepSign * 0.4, forward: 0.85, extentZ: 0.3, lenCrown: 0.15, lenFront: 0.18,
+      lift: 0.6 + 0.9 * config.crownVolume, spike: 0.5 + 0.8 * config.spikeLift, reach: 0.86, frontReach: 0.1, spacing: 0.066, width: 0.03,
       quiff: 0.35 + 0.5 * config.spikeLift,
       // the front edge grows from the painted hairline: short locks rising off it
       hairlineRow: (az) => sampleArr(undercutPaint.fullPhi, az),
