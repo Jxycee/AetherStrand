@@ -60,6 +60,7 @@ export const ARCHETYPE_METADATA: ArchetypeMeta[] = [
   { id: 'high-ponytail', label: 'Battle Ponytail', inspiration: 'Yuna X-2 / Fang' },
   { id: 'twin-tails', label: 'Dual Twin-Tails', inspiration: 'JRPG Twin Cascade' },
   { id: 'emo-sweep', label: 'Side-Swept Fringe', inspiration: 'Riku / Dante' },
+  { id: 'short-crop', label: 'Short Crop', inspiration: 'Veteran / Soldier crop' },
 ];
 
 export const ALL_ARCHETYPES: HairBuilderArchetype[] = ARCHETYPE_METADATA.map((a) => a.id);
@@ -693,14 +694,15 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
   const shag = THREE.MathUtils.clamp(config.layerShag, 0, 1);
   const spikeAmt = THREE.MathUtils.clamp(config.spikeLift, 0, 1);
   const bangsLenPhi = THREE.MathUtils.lerp(1.48, 2.34, config.bangsLength);
-  const sideLenPhi = THREE.MathUtils.lerp(1.94, 3.04, config.sideLength);
-  const backLenPhi = THREE.MathUtils.lerp(2.24, 3.48, config.backLength);
+  const isCrop = arch === 'short-crop';
+  const sideLenPhi = isCrop ? THREE.MathUtils.lerp(1.45, 1.85, config.sideLength) : THREE.MathUtils.lerp(1.94, 3.04, config.sideLength);
+  const backLenPhi = isCrop ? THREE.MathUtils.lerp(2.1, 2.7, config.backLength) : THREE.MathUtils.lerp(2.24, 3.48, config.backLength);
 
   const isBob = arch === 'sleek-bob';
   const isAsym = arch === 'asym-cascade';
   const isDolphin = arch === 'dolphin-long';
   const isHalfUp = arch === 'ribbon-halfup';
-  const isSweptBack = arch === 'swept-back';
+  const isSweptBack = arch === 'swept-back' || isCrop; // short-crop reuses the brushed-back crown with short length caps
   const isPonytail = arch === 'high-ponytail';
   const isTwinTails = arch === 'twin-tails';
   const isEmoSweep = arch === 'emo-sweep';
@@ -708,6 +710,91 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
   const isSpiky = arch === 'spiky-hero' || spikeAmt > 0.45;
   const isPulledScalp = isPonytail || isTwinTails;
   const napeHugBase = isBob || isPulledScalp ? 1.26 : isLong ? 0.84 : 1.06;
+
+  // NEON-SEED short-crop (standalone, early return)
+  if (arch === 'short-crop') {
+    const topLift = 0.011 + config.crownVolume * 0.015;
+    const sideEndBase = THREE.MathUtils.lerp(1.55, 1.72, config.sideLength); // ends at the ear top (real crew cut taper)
+    const napeEndBase = THREE.MathUtils.lerp(1.95, 2.15, config.backLength); // tapered nape
+    const frontHairlinePhi = THREE.MathUtils.lerp(1.22, 1.36, config.bangsLength); // mid-forehead hairline (measured against the real photo)
+    const sweepDir = THREE.MathUtils.clamp(config.bangsSweep, -1, 1);
+
+    // Zone 1: Full dome near-skin foundation shell
+    for (let tier = 0; tier < 4; tier++) {
+      const count = tier === 0 ? 20 : 30;
+      for (let i = 0; i < count; i++) {
+        const theta = (i / count) * Math.PI * 2 + tier * 0.19;
+        const cosT = Math.cos(theta);
+        const isFront = cosT > 0.38;
+        const isBack = cosT < -0.22;
+        const phiStart = tier === 0 ? 0.01 : 0.16 + tier * 0.28;
+        const maxPhi = isFront ? frontHairlinePhi - 0.04 : isBack ? napeEndBase - 0.06 : sideEndBase - 0.05;
+        if (phiStart >= maxPhi - 0.05) continue;
+        const pts = buildSculptedLock({
+          thetaStart: theta, thetaEnd: theta, phiStart,
+          phiEnd: Math.min(maxPhi, Math.max(phiStart + 0.3, phiStart + 0.72)),
+          baseLift: 0.002 + tier * 0.001, midArch: 0.002, tipFlickOut: 0.001, napeHug: 1.35,
+        });
+        specs.push({
+          pointsLocal: pts, width: 0.095 * wMul, thickness: 0.009, stiffnessBias: 0.99, layerAO: 0.84,
+          layerOrder: 0, isBaseShell: true, lockNormal: false, scalpRoot: tier === 0 ? 0.5 : 0.25,
+        });
+      }
+    }
+
+    // Zone 2: Tapered near-skin sides & nape above the ears
+    const sideRows = 4;
+    for (let r = 0; r < sideRows; r++) {
+      const rowFrac = r / (sideRows - 1);
+      const count = Math.round(56 * density);
+      for (let i = 0; i < count; i++) {
+        const theta = (i / count) * Math.PI * 2 + r * 0.11 + (rand() - 0.5) * 0.05;
+        const cosT = Math.cos(theta);
+        if (cosT > 0.48) continue;
+        const isBack = cosT < -0.25;
+        const maxPhi = isBack ? napeEndBase : sideEndBase;
+        const phiStart = THREE.MathUtils.lerp(0.76, maxPhi - 0.22, rowFrac);
+        const phiEnd = Math.min(maxPhi, phiStart + 0.24 + (1 - rowFrac) * 0.1);
+        const taperLift = THREE.MathUtils.lerp(0.009, 0.003, rowFrac);
+        const pts = buildSculptedLock({
+          thetaStart: theta, thetaEnd: theta + (rand() - 0.5) * 0.04, phiStart, phiEnd,
+          baseLift: taperLift, midArch: 0.002, tipFlickOut: 0.001, napeHug: 1.4,
+        });
+        specs.push({
+          pointsLocal: pts, width: THREE.MathUtils.lerp(0.024, 0.018, rowFrac) * wMul, thickness: 0.008,
+          stiffnessBias: 0.98, layerAO: 0.78 + rowFrac * 0.12, layerOrder: 1, lockNormal: false, scalpRoot: 0.35,
+        });
+      }
+    }
+
+    // Zone 3: Short brushed forward-up crown & hairline quiff
+    const crownRings = 5;
+    for (let ring = 0; ring < crownRings; ring++) {
+      const rf = ring / (crownRings - 1);
+      const count = Math.round((20 + ring * 8) * density);
+      for (let i = 0; i < count; i++) {
+        const theta = (i / count) * Math.PI * 2 + ring * 0.27 + (rand() - 0.5) * 0.08;
+        const cosT = Math.cos(theta);
+        const isFrontZone = cosT > 0.35;
+        const phiStart = 0.04 + rf * (isFrontZone ? frontHairlinePhi - 0.34 : 0.72);
+        const segLen = isFrontZone ? 0.34 + config.bangsLength * 0.1 : 0.3 + shag * 0.06;
+        const phiEnd = Math.min(isFrontZone ? frontHairlinePhi : 1.2, phiStart + segLen);
+        const forwardBias = isFrontZone ? sweepDir * 0.16 : -Math.sin(theta) * 0.08 + sweepDir * 0.08;
+        const frontUpFlick = isFrontZone ? 0.008 + config.crownVolume * 0.01 : 0.003 + spikeAmt * 0.004;
+        const pts = buildSculptedLock({
+          thetaStart: theta, thetaEnd: theta + forwardBias, phiStart, phiEnd,
+          baseLift: topLift * (1.0 - rf * 0.22), midArch: 0.004 + config.crownVolume * 0.003,
+          tipFlickOut: frontUpFlick, tipDropExtra: isFrontZone ? -0.008 : 0, napeHug: 1.2,
+        });
+        specs.push({
+          pointsLocal: pts, width: (0.02 + rand() * 0.009) * wMul, thickness: 0.01, stiffnessBias: 0.96,
+          layerAO: 0.88 + rf * 0.08, layerOrder: 3, lockNormal: false, scalpRoot: ring === 0 ? 0.55 : 0.35,
+        });
+      }
+    }
+
+    return specs;
+  }
 
   // =========================================================================
   // ZONE A: Seamless 360° Inner Foundation Shell (phiStart = 0.01 seals crown apex 100%)
@@ -789,7 +876,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
     }
   } else if (isSweptBack) {
     // Clive / Vergil windswept brushed-back forehead & crown waves flowing seamlessly over the occiput
-    const waveCount = Math.round(52 * density);
+    const waveCount = Math.round(52 * density * (isCrop ? 1.25 : 1));
     for (let i = 0; i < waveCount; i++) {
       const u = i / (waveCount - 1);
       const side = u < 0.5 ? -1 : 1;
@@ -797,7 +884,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       const subRow = i % 2;
       const thetaStart = (u - 0.5) * Math.PI * 1.18 + (rand() - 0.5) * 0.04;
       // Sweep decisively backward toward the occiput!
-      const thetaEnd = side * THREE.MathUtils.lerp(Math.PI * 0.76, Math.PI * 0.98, 1 - distCenter * 0.45);
+      const thetaEnd = side * THREE.MathUtils.lerp(Math.PI * 0.76, Math.PI * 0.98, 1 - distCenter * 0.45) * (isCrop ? 0.65 : 1); // crop: 35% less side-to-rear wrap
       const phiStart = 0.04 + subRow * 0.1 + distCenter * 0.14;
       const phiEnd = Math.min(3.05, backLenPhi - 0.18 + (i % 3) * 0.14);
 
@@ -806,15 +893,15 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
         thetaEnd,
         phiStart,
         phiEnd,
-        baseLift: crownLift + 0.004 + subRow * 0.005,
-        midArch: 0.02 + config.crownVolume * 0.012,
-        tipFlickOut: 0.018 + shag * 0.026,
-        sCurveAmp: side * 0.045,
+        baseLift: isCrop ? Math.min(0.008, crownLift + 0.004 + subRow * 0.005) : crownLift + 0.004 + subRow * 0.005,
+        midArch: isCrop ? 0.008 : 0.02 + config.crownVolume * 0.012,
+        tipFlickOut: isCrop ? 0.008 : 0.018 + shag * 0.026,
+        sCurveAmp: side * 0.045 * (isCrop ? 0.65 : 1),
         napeHug: 1.06,
       });
       specs.push({
         pointsLocal: pts,
-        width: (0.054 + rand() * 0.008) * wMul,
+        width: (0.054 + rand() * 0.008) * wMul * (isCrop ? 1.15 : 1),
         thickness: 0.013,
         stiffnessBias: 0.88,
         layerAO: 0.88 + subRow * 0.08,
@@ -919,6 +1006,8 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       phiEnd = centerVeil
         ? 1.72 + (i % 3) * 0.08
         : 1.82 + distMid * 0.48 + (i % 3) * 0.08;
+      if (isCrop) phiEnd = Math.min(phiEnd, 1.18 + config.bangsLength * 0.2 + (i % 3) * 0.04); // and fall nearly straight (no centre V) cropped hairline: bangs stop at the forehead edge
+      if (isCrop) thetaEnd = thetaStart + sideSign * (0.22 + distMid * 0.18); // brushed up-and-back, lateral sweep
     } else if (isEmoSweep) {
       // Dramatic Riku / Dante long angled fringe sweeping across one eye
       const longSideFactor = sweepDir < 0 ? frac : 1 - frac;
@@ -1392,6 +1481,7 @@ const ARCHETYPE_PRESET_MAP: Record<HairBuilderArchetype, HairPresetId> = {
   'high-ponytail': 'silver',
   'twin-tails': 'crimson',
   'emo-sweep': 'leon',
+  'short-crop': 'silver',
 };
 
 function buildArchetypeParameters(archetype: HairBuilderArchetype, rand: () => number, seed: number): HairBuilderConfig {
@@ -1501,6 +1591,21 @@ function buildArchetypeParameters(archetype: HairBuilderArchetype, rand: () => n
         layerShag: rRange(0.32, 0.62),
         density: rRange(0.96, 1.12),
         strandWidth: rRange(0.94, 1.1),
+        seed,
+      };
+    case 'short-crop':
+      return {
+        archetype,
+        partPosition: rRange(-0.2, 0.2),
+        bangsLength: rRange(0.1, 0.3),
+        bangsSweep: rRange(-0.4, 0.1),
+        crownVolume: rRange(0.2, 0.4),
+        spikeLift: rRange(0, 0.1),
+        sideLength: rRange(0.05, 0.25),
+        backLength: rRange(0.05, 0.25),
+        layerShag: rRange(0.2, 0.45),
+        density: rRange(1.0, 1.15),
+        strandWidth: rRange(0.8, 1.0),
         seed,
       };
     case 'swept-back':

@@ -33,7 +33,8 @@ export type HairBuilderArchetype =
   | 'swept-back'
   | 'high-ponytail'
   | 'twin-tails'
-  | 'emo-sweep';
+  | 'emo-sweep'
+  | 'short-crop';
 
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;
