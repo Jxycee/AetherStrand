@@ -22,6 +22,7 @@ export type VisionDebugMode =
 export type BackdropMode = 'lighting' | 'matte-gray' | 'high-contrast' | 'chroma-green';
 
 export type HairBuilderArchetype =
+  | 'noble-hime'
   | 'layered-shag'
   | 'spiky-hero'
   | 'long-cascade'
@@ -35,8 +36,11 @@ export type HairBuilderArchetype =
   | 'twin-tails'
   | 'emo-sweep'
   | 'short-crop'
+  | 'elder-scholar'
+  | 'messy-mage'
   | 'samurai-topknot'
   | 'braided-crown'
+  | 'wavy-bard'
   | 'undercut-fade';
 
 export interface HairBuilderConfig {
