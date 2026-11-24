@@ -1162,14 +1162,15 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
         const u = i / (perSide - 1);
         const ring = i % 3;
         const spreadAngle = (u - 0.5) * Math.PI * 0.9;
-        const anchorTheta = side * (1.96 + (u - 0.5) * 0.16);
-        const anchorPhi = 0.86 + ring * 0.07;
+        // tie roots +30 mm up and ~25 mm further back, root bundle radius -30% (Neon round 4)
+        const anchorTheta = side * (2.08 + (u - 0.5) * 0.16 * 0.7);
+        const anchorPhi = 0.71 + ring * 0.07 * 0.7;
 
         const pts = buildGatheredTailLock({
           anchorTheta,
           anchorPhi,
           outDir: new THREE.Vector3(side * 0.84, 0.08 - ring * 0.06, -0.52),
-          spreadX: side * (0.07 + ring * 0.025) + Math.sin(spreadAngle) * 0.04,
+          spreadX: (side * (0.07 + ring * 0.025) + Math.sin(spreadAngle) * 0.04) * 0.7,
           spreadZ: -0.05 + Math.cos(spreadAngle) * 0.045,
           length: tailLen + (ring === 0 ? 0.05 : -ring * 0.03) + rand() * 0.04,
           archOut: 0.11 + ring * 0.02,
