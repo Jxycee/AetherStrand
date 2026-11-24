@@ -3174,6 +3174,37 @@ function generateRecipeJson(
   );
 }
 
+// Canonical Unity sources: unity-plugin/com.aetherstrand.sculptedhair is the single source of truth for the URP
+// plugin (exact web ports of mesh, shader and solver, head fit, eye-clear fringe, push-out). The web generator only
+// supplies PresetGeometry.json, ExportedLook.json, the recipe and shader constants (Neon decision, 2026-11-23).
+const CANONICAL_PLUGIN_SOURCES = import.meta.glob(
+  '../../unity-plugin/com.aetherstrand.sculptedhair/{Editor,Runtime,Shaders}/*.{cs,shader,asmdef}',
+  { query: '?raw', import: 'default', eager: true }
+) as Record<string, string>;
+const CANONICAL_TEXTURE_METAS = import.meta.glob(
+  '../../unity-plugin/com.aetherstrand.sculptedhair/Textures/*.meta',
+  { query: '?raw', import: 'default', eager: true }
+) as Record<string, string>;
+
+function applyCanonicalPlugin(files: PluginFileEntry[], pipeline: RenderPipeline): PluginFileEntry[] {
+  if (pipeline !== 'urp') return files;
+  const prefix = '../../unity-plugin/com.aetherstrand.sculptedhair/';
+  const byPath = new Map(files.map((f) => [f.path, f] as const));
+  const langOf = (name: string) => (name.endsWith('.cs') ? 'csharp' : name.endsWith('.shader') ? 'hlsl' : name.endsWith('.meta') ? 'yaml' : 'json');
+  for (const [key, content] of [...Object.entries(CANONICAL_PLUGIN_SOURCES), ...Object.entries(CANONICAL_TEXTURE_METAS)]) {
+    const rel = key.slice(prefix.length);
+    const path = `AetherStrand_Unity/${rel}`;
+    const name = rel.split('/').pop() as string;
+    const existing = byPath.get(path);
+    if (existing) {
+      existing.content = content;
+    } else {
+      files.push({ path, name, category: 'unity', language: langOf(name), description: 'Canonical AetherStrand Unity plugin source (unity-plugin/).', content });
+    }
+  }
+  return files;
+}
+
 export function generatePluginFiles(
   shader: ShaderConfig,
   physics: PhysicsConfig,
@@ -3184,7 +3215,7 @@ export function generatePluginFiles(
   const shaderCode =
     pipeline === 'urp' ? generateUrpHairShader(shader) : generateBuiltinHairShader(shader);
 
-  return [
+  return applyCanonicalPlugin([
     {
       path: 'AetherStrand_Unity/Shaders/AetherStrand_Hair.shader',
       name: 'AetherStrand_Hair.shader',
@@ -3321,5 +3352,5 @@ export function generatePluginFiles(
       description: 'Blender 4.x addon that auto-loads PresetGeometry.json, k-means clusters locks onto ~44 shared Hair_ bone chains, and exports Unity FBX (Linear VCol).',
       content: generateBlenderAddonPy(presetId),
     },
-  ];
+  ], pipeline);
 }
