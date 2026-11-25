@@ -3,6 +3,49 @@
 import * as THREE from 'three';
 import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 
+const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+/** Web (x, y, z) triples -> the file's Blender axes (x, -z, y), rounded to a micrometre. */
+function blender3(a: ArrayLike<number>): number[] {
+  const out = new Array(a.length);
+  for (let i = 0; i < a.length; i += 3) { out[i] = r6(a[i]); out[i + 1] = r6(-a[i + 2]); out[i + 2] = r6(a[i + 1]); }
+  return out;
+}
+const flat = (a: ArrayLike<number>, round = false) => Array.from(a, (x) => (round ? r6(x) : x));
+
+/** The hybridMass block of PresetGeometry.json: see AetherStrandWebData.LoadMass for the reader. */
+export function exportMass(m: any): any {
+  const g = m.geometry;
+  const attr = (n: string) => g.attributes[n].array as ArrayLike<number>;
+  return {
+    version: 1,
+    vertexCount: m.vertexCount,
+    nodesPerLock: m.nodesPerLock,
+    bindCount: m.bindCount,
+    followShare: m.followShare,
+    followSmooth: m.followSmooth,
+    blockCount: m.blockCount,
+    rest: blender3(m.rest),
+    restHeadNormal: blender3(m.restHeadNormals),
+    restTangent: blender3(m.restTangents),
+    uv: flat(attr('uv'), true),
+    seed: flat(attr('aStrandSeed'), true),
+    layerAO: flat(attr('aLayerAO'), true),
+    scalpRoot: flat(attr('aScalpRoot'), true),
+    gradT: flat(attr('aGradT'), true),
+    indices: flat(g.index.array),
+    bindNode: flat(m.bindNode),
+    bindW: flat(m.bindW, true),
+    restHeight: flat(m.restHeight, true),
+    adjStart: flat(m.adjStart),
+    adjIdx: flat(m.adjIdx),
+    vBlock: flat(m.vBlock),
+    vInterpB: flat(m.vInterpB),
+    vInterpW: flat(m.vInterpW, true),
+    bAdjStart: flat(m.bAdjStart),
+    bAdjIdx: flat(m.bAdjIdx),
+  };
+}
+
 export function exportGeometry(recipe: any): any {
   const hair: any = new HairPhysicsSystem(new THREE.ShaderMaterial(), recipe.presetId);
   const headPivot = new THREE.Group();
@@ -45,12 +88,16 @@ export function exportGeometry(recipe: any): any {
   });
   return {
     schemaVersion: '2.1',
+    // Hybrid inner mass (hairMass.ts), when the recipe turns it on: the built mesh and its follow data, so the plugin only
+    // runs the deform (AetherStrandWebMass.cs) and builds nothing. Unconformed web space like the locks (the plugin maps it
+    // through its head fit). Lock indices in bindNode are into `locks` below.
+    ...(hair.mass ? { hybridMass: exportMass(hair.mass) } : {}),
     sourcePivot: [0, 0.44, 0],
     strandWidthScale: w,
     presetId: recipe.presetId,
     presetName: recipe.customName ?? recipe.presetId,
     coordinateSystem: 'blender_z_up_neg_y_front',
-    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,strandCard,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine,shadeDir,rootWidth when set',
+    solverExtras: 'hybridMass block when built; layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,strandCard,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine,shadeDir,rootWidth when set',
     lockCount: exported.length,
     // Painted short-hair layer under the locks (scalpPaint.ts); the plugin builds a scalp shell from the character's head.
     ...(hair.scalpPaint ? { scalpPaint: hair.scalpPaint } : {}),
