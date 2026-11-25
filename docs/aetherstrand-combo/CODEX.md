@@ -115,6 +115,7 @@ Write `prompt` so Jaycee can paste it whole, with nothing else from you:
 
 - Reference: the cut in plain words, the look (stylised realistic game art, not a photo, not flat anime), and the views needed side by side on one plain background (front, three-quarter, side, back). This part may go to Gemini's image tool.
 - Issue: what the generator is (procedural ribbon locks, TypeScript + three.js, mirrored in Unity), what looks wrong and from which view, how the part is built now, what you tried and what each did, a short code excerpt, and two or three direct questions. Name the render and reference files in `attach` (they live in the AetherStrand files under `previews/` and `refs/`).
+- Code: when a request needs Neon to read code, name the branch in the request (`main` or `claude/new-hair-styles-ogdf7g`). Whoever sends it attaches the code in Gemini with + → More Uploads → Import Code → the branch's public GitHub link (both branches are already connected). The how-to is in `neon/README.md` in the AetherStrand files.
 
 ```
 { op: "set", collection: "neon", doc_id: "n0NN", data: { styleId: "undercut-fade", kind: "issue", title: "...", prompt: "...", attach: ["undercut-fade-v6.png (AetherStrand files, previews)"], status: "open", opened: "<now>", source: "Claude" } }
