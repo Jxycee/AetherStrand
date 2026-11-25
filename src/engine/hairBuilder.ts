@@ -579,6 +579,10 @@ export interface CropFieldOptions {
    *  root. Where outer tips end at different heights the under layer shows between them; shaded darker it read as a stack
    *  of dark leaves down the side of the top. */
   sideUnderLight?: number;
+  /** Length multiplier for locks on the side of the top (|azimuth| 0.95 to 2.0, easing back to 1 behind), default 1.
+   *  Longer side locks (about 1.4) leave fewer rows of tips above the ear, so the side reads as one combed surface;
+   *  shorter ones (0.6) made more rows of dark tips. */
+  sideLength?: number;
   /** How far back (relative to straight up) the quiff pushes the front hair: 0 = straight up, 1 = 45 degrees back. Default 0.25. */
   quiffBack?: number;
   /** Clump cards: a wide pointed card over each clump guide, width as a share of `clumpSpacing` (0 = none, about 0.7 for chunky game hair). Default 0. */
@@ -797,7 +801,8 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       // shaded like the outer one, so the back reads as one combed surface rather than shingles with dark gaps
       const backK = _ss((Math.abs(az0) - smoothFrom) / 0.8) * (o.backSmooth ?? 1);
       const tuftLock = outer && !!g && g.tuft;
-      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK) * (tuftLock ? 0.5 + 0.15 * rnd() : 1);
+      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK) * (tuftLock ? 0.5 + 0.15 * rnd() : 1)
+        * (1 + ((o.sideLength ?? 1) - 1) * _ss((Math.abs(az0) - 0.95) / 0.35) * (1 - _ss((Math.abs(az0) - 2.0) / 0.4)));
       const path = march(u, len, fk);
       if (path.length < 3) return;
       const realLen = (path.length - 1) * (len / 8);
@@ -833,7 +838,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       specs.push({
         pointsLocal: pts,
         // front hairline locks are seen face on as they rise: a little wider so the front reads full, not as a comb
-        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk), realLen * 0.6) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
+        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
         // the under layer is darker, except at the front hairline where it is seen face on beside the outer locks
         // (toward the fade the layers lie flat on the paint: no under-layer shadow, so the edge isn't a dark rim)
         thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se), layerOrder: outer ? 3 : 2, smooth: 2,
@@ -854,7 +859,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         // each lock is a piece of longer hair: no light tip on every lock (that dots the surface)
         // (the under layer a little darker for depth between clumps, but no dark roots: seen through gaps in the outer layer,
         // dark roots read as holes)
-        colorRange: o.colorRange ?? (outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55]),
+        colorRange: o.colorRange ?? (tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55]),
       });
     };
     roots(spacing, layer * 1.3, grow);
@@ -2642,7 +2647,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,

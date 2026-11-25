@@ -164,6 +164,10 @@ shows as dark teeth along the hairline.
   - `centreArch` (m, default 0): the middle third of the front stands higher than the temples, so the front has an arched
     silhouette instead of a flat block (undercut: 0.02).
   - `sideUnderLight` (0..1, default 0): on the sides the under layer is shaded like the outer one, with a lighter root.
+  - `sideLength` (default 1): length multiplier for locks on the side of the top (|azimuth| 0.95 to 2.0). Longer (1.4)
+    leaves fewer rows of tips above the ear; shorter (0.6) made more rows of dark tips (undercut: 1.4).
+  - Tuft locks are 1.5 times wider (up to 0.9 of their length) and show the colour gradient out to the tip colour
+    (`colorRange` [0.3, 1]), so tufts read as lit, chunky clumps over the darker base cap.
   - Outer-layer locks have `scalpRoot` 0.2 (they lie on other hair, not skin), so their roots keep a light shade; the
     shaders darken the root by `rootAO x 0.72 x scalpRoot`. A full root shade under every row of tips doubled up with the
     layer shading as dark wedges.
