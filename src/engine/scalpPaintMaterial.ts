@@ -31,6 +31,7 @@ const frag = /* glsl */ `
   uniform vec3 uLightDir;
   uniform float uIrreg;
   uniform float uUnderShade;
+  uniform float uGrainStretch;
   varying vec3 vLocal;
   varying vec3 vNormalW;
   varying vec3 vPosW;
@@ -68,7 +69,9 @@ const frag = /* glsl */ `
     float dens = paintRamp(phi, full, edge, ed, uFeather) * uDensity;
     if (dens < 0.002) discard;
     // scalpPaintAlpha: soft gradient mixed with stipple by grain
-    float n = 0.5 + (hash(floor(vec2(az, phi) / 0.004)) - 0.5) * min(1.0, uGrain + 0.2);
+    // (grainStretch: cells longer along phi, narrower across, so a fade reads as short hairs)
+    float gs = sqrt(max(1.0, uGrainStretch));
+    float n = 0.5 + (hash(floor(vec2(az * gs, phi / gs) / 0.004)) - 0.5) * min(1.0, uGrain + 0.2);
     float stip = smoothstep(n - 0.14, n + 0.14, dens);
     float a = dens >= 0.999 ? 1.0 : mix(pow(dens, 0.85), stip, min(1.0, uGrain * 0.5));
     if (a < 0.01) discard;
@@ -124,6 +127,7 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
       uLift: { value: lift },
       uIrreg: { value: 0.5 },
       uUnderShade: { value: 0 },
+      uGrainStretch: { value: 1 },
     },
   });
   let meshes: THREE.Mesh[] = [];
@@ -148,6 +152,7 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
       mat.uniforms.uGrain.value = p.grain;
       mat.uniforms.uIrreg.value = p.irregularity ?? 0.5;
       mat.uniforms.uUnderShade.value = p.underShade ?? 0;
+      mat.uniforms.uGrainStretch.value = p.grainStretch ?? 1;
     },
     setColor(rootHex, baseHex, tipHex, specHex, specIntensity) {
       hairCol = [rootHex, baseHex, tipHex, specHex, specIntensity];

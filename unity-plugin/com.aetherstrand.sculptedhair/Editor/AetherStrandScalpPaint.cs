@@ -134,6 +134,7 @@ namespace AetherStrand.Editor
             mat.SetFloat("_Grain", (float)paint.grain);
             mat.SetFloat("_Irregularity", (float)paint.irregularity);
             mat.SetFloat("_UnderShade", (float)paint.underShade);
+            mat.SetFloat("_GrainStretch", (float)paint.grainStretch);
             mat.SetColor("_Color", PaintColor(paint, hairMaterial));
             EditorUtility.SetDirty(mat);
             return mat;

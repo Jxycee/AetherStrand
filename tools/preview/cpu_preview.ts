@@ -168,7 +168,9 @@ const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
 // painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
 const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40', sh.primarySpecColor, sh.primaryIntensity ?? 0.32);
 const grainAt = (az: number, phi: number) => {
-  const a = Math.floor(az / 0.011), b = Math.floor(phi / 0.011);
+  // (grainStretch: cells longer along phi, narrower across, same area)
+  const gs = Math.sqrt(Math.max(1, paint?.grainStretch ?? 1));
+  const a = Math.floor(az * gs / 0.011), b = Math.floor(phi / gs / 0.011);
   const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
   return h - Math.floor(h);
 };

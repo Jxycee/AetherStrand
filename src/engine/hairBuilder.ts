@@ -1059,6 +1059,8 @@ export interface FadePaintOptions extends EarCutOptions {
   feather?: number;
   /** Stipple of the partial-density band (0 smooth, 1 strongly dotted). Default 0.6. */
   grain?: number;
+  /** >= 1: grain stretched along the comb (ScalpPaint.grainStretch), so the fade reads as short hairs. Default 1. */
+  grainStretch?: number;
   /** 0..1: how much of the sideburn stays solid instead of fading (the fade band shrinks over the sideburn). Default 0.6. */
   sideburnSolid?: number;
   /**
@@ -1090,7 +1092,7 @@ export function fadeScalpPaint(o: FadePaintOptions = {}): ScalpPaint {
   const archCut = earAlignedCutPhi(EAR_CENTER_THETA, o);
   const bl = THREE.MathUtils.clamp(o.blend ?? 0.5, 0, 1);
   const band = Math.max(0.04, h * (archCut - top) * (0.7 + 0.6 * bl));
-  return makeScalpPaint({
+  return { ...makeScalpPaint({
     full: (az) => {
       const a = Math.abs(az);
       const cut = earAlignedCutPhi(a, o);
@@ -1109,7 +1111,7 @@ export function fadeScalpPaint(o: FadePaintOptions = {}): ScalpPaint {
     edgeDensity: (az) => THREE.MathUtils.lerp(0.55, o.stubble ?? 0.2, _ss((Math.abs(az) - 0.75) / 0.6)),
     feather: (o.feather ?? 0.05) * (0.6 + 0.8 * bl),
     grain: o.grain ?? 0.6,
-  });
+  }), ...(o.grainStretch && o.grainStretch > 1 ? { grainStretch: o.grainStretch } : {}) };
 }
 
 /**
@@ -1175,7 +1177,7 @@ export function undercutHairlineWobble(config: HairBuilderConfig): (az: number) 
 export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 1.2): ScalpPaint {
   // thin tapered sideburn (mostly faded), wide soft blend from the top length into the short sides
   // (shaded under the hair, so the side locks lie on darker short hair instead of ending as dark leaves on a lit band)
-  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend }), underShade: 0.5 };
+  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend, grainStretch: 5 }), underShade: 0.5 };
 }
 SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => undercutFadePaint(config);
 
@@ -2788,7 +2790,8 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
     // rising up and back, everything getting shorter and flatter down to where the painted fade takes over
     // (the top's locks end at the line a 0.6 fade would give whatever fadeHeight is: a lower fadeHeight fills the sides with
     // solid painted short hair up to meet the top, the head reads full from the front, and the top keeps no long overhang)
-    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6) }, 0); // (extent: no back blend)
+    // (and a nape no lower than backLength 0.6 would put it: a longer back lengthens the painted fade below the top, not the top)
+    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6), backLength: Math.min(config.backLength, 0.6) }, 0); // (extent: no back blend)
     // (an uneven front edge: hair meets the forehead along a soft wobble, not a ruled line)
     const wob = undercutHairlineWobble(config);
     cropFieldLocks(specs, {

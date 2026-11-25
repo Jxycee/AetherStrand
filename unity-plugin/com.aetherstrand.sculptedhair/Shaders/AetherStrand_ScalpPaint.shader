@@ -11,6 +11,7 @@ Shader "AetherStrand/ScalpPaint"
         _Density ("Overall Density", Range(0, 1)) = 1
         _Grain ("Stubble Grain", Range(0, 1)) = 0.5
         _GrainCell ("Grain Cell (rad)", Range(0.001, 0.02)) = 0.004
+        _GrainStretch ("Grain Stretch Along The Comb (1 = round dots)", Range(1, 10)) = 1
         _Irregularity ("Hairline Irregularity", Range(0, 1)) = 0.5
         _Streaks ("Strand Streaks", Range(0, 1)) = 1
         _UnderShade ("Shade Under The Hair", Range(0, 1)) = 0
@@ -36,7 +37,7 @@ Shader "AetherStrand/ScalpPaint"
             TEXTURE2D(_Curves); SAMPLER(sampler_Curves);
             CBUFFER_START(UnityPerMaterial)
                 half4 _Color;
-                float _Feather, _Density, _Grain, _GrainCell, _Irregularity, _Streaks, _UnderShade;
+                float _Feather, _Density, _Grain, _GrainCell, _GrainStretch, _Irregularity, _Streaks, _UnderShade;
             CBUFFER_END
 
             // web scalp ellipsoid (HEAD_CENTER_LOCAL, SCALP_RX/RY/RZ)
@@ -94,7 +95,9 @@ Shader "AetherStrand/ScalpPaint"
                 float dens = PaintRamp(phi, full, edge, ed, _Feather) * _Density;
                 clip(dens - 0.002);
                 // scalpPaintAlpha: a soft gradient mixed with stipple by grain, so the edge blends into the skin
-                float n = 0.5 + (hash21(floor(float2(az, phi) / _GrainCell)) - 0.5) * min(1.0, _Grain + 0.2);
+                // (grainStretch: cells longer along phi, narrower across, so a fade reads as short hairs)
+                float gs = sqrt(max(1.0, _GrainStretch));
+                float n = 0.5 + (hash21(floor(float2(az * gs, phi / gs) / _GrainCell)) - 0.5) * min(1.0, _Grain + 0.2);
                 float stip = smoothstep(n - 0.14, n + 0.14, dens);
                 float a = dens >= 0.999 ? 1.0 : lerp(pow(dens, 0.85), stip, min(1.0, _Grain * 0.5));
                 clip(a - 0.01);

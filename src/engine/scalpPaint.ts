@@ -39,6 +39,10 @@ export interface ScalpPaint {
    *  shadow the locks cast on the short hair below them. Without it the paint between lock tips is lit like open short hair
    *  and lighter than the locks, so every tip over it reads as a dark leaf. */
   underShade?: number;
+  /** >= 1, default 1: grain cells stretched along phi (the comb direction of short hair) by this much, narrower across
+   *  by its square root (same cell area). At 1 the stipple is round dots; at about 5 a fade reads as short hairs
+   *  growing down instead of noise. Mirrored in scalpPaintMaterial.ts, cpu_preview.ts and the Unity shader. */
+  grainStretch?: number;
 }
 
 /** Hairline softness and colour controls shared by every style (HairBuilderConfig.hairlineSoftness / scalpColor). */
@@ -279,5 +283,6 @@ export function unionScalpPaint(a: ScalpPaint, b: ScalpPaint): ScalpPaint {
     feather: Math.max(a.feather, b.feather),
     density: Math.max(a.density, b.density),
     grain: Math.max(a.grain, b.grain),
+    grainStretch: Math.max(a.grainStretch ?? 1, b.grainStretch ?? 1),
   };
 }

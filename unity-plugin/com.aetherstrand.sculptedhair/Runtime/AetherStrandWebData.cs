@@ -107,6 +107,8 @@ namespace AetherStrand
         public double irregularity = 0.5;
         /// <summary>0..1 darkening of the paint under the hair (paintUnderShade in scalpPaint.ts). Default 0.</summary>
         public double underShade = 0.0;
+        /// <summary>>= 1: grain cells stretched along phi (grainStretch in scalpPaint.ts). Default 1.</summary>
+        public double grainStretch = 1.0;
         /// <summary>Optional colour override ('#rrggbb' in the JSON); null = the hair's own colour (see AetherStrandScalpPaint).</summary>
         public string color;
 
@@ -204,6 +206,7 @@ namespace AetherStrand
                 grain = AetherStrandJson.D(d, "grain", 0.5),
                 irregularity = AetherStrandJson.D(d, "irregularity", 0.5),
                 underShade = AetherStrandJson.D(d, "underShade", 0.0),
+                grainStretch = AetherStrandJson.D(d, "grainStretch", 1.0),
                 color = d.ContainsKey("color") ? d["color"] as string : null,
             };
             p.bins = p.fullPhi.Length;

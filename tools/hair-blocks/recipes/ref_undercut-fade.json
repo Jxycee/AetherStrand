@@ -10,7 +10,7 @@
   "crownVolume": 0.6,
   "spikeLift": 0.5,
   "sideLength": 0.6,
-  "backLength": 0.6,
+  "backLength": 1.0,
   "layerShag": 0.6,
   "density": 1.05,
   "strandWidth": 0.95,

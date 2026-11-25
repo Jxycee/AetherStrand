@@ -23,6 +23,11 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
   open short hair and comes out lighter than the locks, so every tip over it reads as a dark leaf (the undercut's side
   wedges). `paintUnderShade` in scalpPaint.ts; mirrored in scalpPaintMaterial.ts and the Unity shader (`_UnderShade`,
   read from the JSON as `underShade`). Undercut: 0.5.
+- `grainStretch` (>= 1, default 1): the grain's cells are this much longer along phi (the comb direction of short hair)
+  and narrower across by its square root, so the same area. At 1 the partial-density stipple is round dots, which read as
+  noise; at about 5 a fade reads as short hairs growing down. Mirrored in scalpPaintMaterial.ts (`uGrainStretch`),
+  cpu_preview.ts and the Unity shader (`_GrainStretch`, read from the JSON as `grainStretch`). `fadeScalpPaint` takes it
+  as an option. Undercut: 5.
 - `extendFrontPaint(paint, reach, width)` (hairBuilder.ts): moves the paint's full and edge lines `reach` rad down the
   forehead. Lock roots along a front hairline leave the scalp as a row of small teeth; on full-density paint they sit on
   hair colour instead of the paint's thin edge. Build the hair from the unextended cut (undercut:
@@ -102,7 +107,7 @@ values: each build sets them from `config.earLandmarks` (`setEarLandmarks`), or 
 
 Where the front hairline sits matters on a near-vertical forehead like Tobin's. At phi 1.3 the front locks had to climb
 the forehead wall and read as a hanging fringe from every view; at about phi 1.0 the hair starts where the forehead
-curves back and rises from there (undercut-fade uses `roundedHairline(1.02, 0.12, 0.8)`).
+curves back and rises from there (undercut-fade uses `roundedHairline(0.98, 0.03, 0.75)`).
 
 `roundedHairline(centre, cornerLift, width)` gives a curved front hairline for the cut line (`hairlinePhi`): highest at
 the temple corners, lowest in the middle of the forehead. Combine it with `templeRecede` for the temple dip of most men's
@@ -210,7 +215,7 @@ shows as dark teeth along the hairline.
   - Undercut: the top's locks end where a 0.6 fade would put the hair edge, whatever the recipe's `fadeHeight`. The
     recipe's `fadeHeight` is 0.4, so the fade climbs most of the way to the top's edge and the sides read as short hair
     under a separate top, not one dark helmet (0.18 left solid paint to the cut line; 0.6 went too pale and high).
-    `backTaper` is 0.3 with `taperShade` 0: the back keeps longer pointed pieces that end over the fade, like the
+    The recipe's `backLength` is 1.0: the nape sits lower and the back fade is longer, while the top's locks still end where `backLength` 0.6 would put them (the archetype caps it for the locks), so a longer back lengthens the painted fade, not the top. `backTaper` is 0.3 with `taperShade` 0: the back keeps longer pointed pieces that end over the fade, like the
     stylised reference, instead of a flat dark skirt. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
     painted side crisp. The hairline is `roundedHairline(0.98, 0.03, 0.75)` with `templeRecede` 0.03 (more corner lift and temple recession scored lower against the references, which keep a fairly straight hairline with full temples): a soft curve across
     the forehead with a small recession at each temple corner (a straight 0.02 lift read as a cap brim in the 3/4 view),
