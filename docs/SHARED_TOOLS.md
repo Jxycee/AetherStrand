@@ -170,9 +170,20 @@ shows as dark teeth along the hairline.
     they melt into the layer below instead of ending as hard wedges (undercut: 0.15).
   - `tufts` (0..1, default 0): share of the top's clump guides that are tufts. Their outer locks are about half as long
     and lift early (t^1.6 instead of t^3) with 0.8 to 1.4 times the spike height, so the top is a base cap with shorter
-    tufts standing out of it rather than one brushed sheet (undercut: 0.4).
+    tufts standing out of it rather than one brushed sheet (undercut: 0.8).
+  - Pieces (`pieceDepth`, `pieceGroove`, `pieceGather`, `pieceTwist`, `pieceLift`, all default 0): each clump becomes a
+    separate raised piece instead of a stretch of one combed sheet. `pieceDepth` (m) lowers an outer lock by up to that
+    much the further its root is from its clump guide (squared, never more than 60% of the hair surface height there), so
+    every clump has a ridge and neighbours meet in a valley. `pieceGroove` (0..1) shades those border locks darker, so
+    the valleys read as shadow lines. `pieceGather` (0..1) gathers the outer locks onto their guide from near the root
+    (t^0.6 instead of t^1.5), so a piece runs together along its length rather than only at the tip. `pieceTwist` (rad)
+    turns each clump's direction by a random angle up to that (less at the front hairline), so pieces cross and overlap
+    instead of lying parallel. `pieceLift` (0..1) gives each top piece up to that much extra height. All fade out toward
+    the fade edge. With every option at 0 the layout is exactly as before (no extra random draws). Undercut: depth 0.014,
+    groove 0.65, gather 0.7, twist 0.35, lift 0.4, with `clumpSpacing` 0.085, `clump` 1, `tufts` 0.8, `surfaceNoise` 0.012
+    (v15).
   - `surfaceNoise` (m, default 0): low-frequency rises and dips of the hair surface by position on the head, so light
-    falls in broad patches (undercut: 0.006).
+    falls in broad patches (undercut: 0.012).
   - `centreArch` (m, default 0): the middle third of the front stands higher than the temples, so the front has an arched
     silhouette instead of a flat block (undercut: 0.02).
   - `sideUnderLight` (0..1, default 0): on the sides the under layer is shaded like the outer one, with a lighter root.
