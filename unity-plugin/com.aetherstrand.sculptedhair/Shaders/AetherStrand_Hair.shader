@@ -7,6 +7,7 @@ Shader "AetherStrand/SculptedHair_URP"
         _FlowIdMap ("Flow / ID / Shift Map (R=ID, G=Grad, B=Shift)", 2D) = "gray" {}
         [Normal] _NormalMap ("Strand Tangent Normal", 2D) = "bump" {}
         _AlphaMap ("Feathered Wispy-Tip Alpha Mask (R)", 2D) = "white" {}
+        _StrandFlowMap ("Baked Strand Direction (RG = across, along)", 2D) = "gray" {}
         [Toggle(_USE_ALPHA_CLIP)] _UseAlphaClip ("Enable Feathered Wispy-Tip Clipping", Float) = 1
         _AlphaClip ("Alpha Cutoff", Range(0.05, 0.85)) = 0.36
         [Header(Web Light Rig Parity)]
@@ -28,11 +29,19 @@ Shader "AetherStrand/SculptedHair_URP"
         _FadeSoftness ("Fade Softness (share of the fade that dithers out)", Range(0.05, 1.0)) = 0.85
 
         [Header(Game Style Sheen And Clump Look)]
-        _SheenBand ("Soft Sheen Band Intensity", Range(0.0, 1.5)) = 0.30
-        _SheenPower ("Soft Sheen Band Power (low = wider)", Range(4.0, 60.0)) = 14.0
-        _ShadowLift ("Shadow / AO Lift (anti-mud)", Range(0.0, 0.8)) = 0.30
+        _SheenBand ("Soft Sheen Band Intensity (sheenStrength)", Range(0.0, 1.5)) = 0.40
+        _SheenPower ("Soft Sheen Band Power (low = wider)", Range(4.0, 60.0)) = 10.0
+        _SheenShift ("Soft Sheen Band Shift", Range(-0.5, 0.5)) = 0.02
+        _SheenTint ("Soft Sheen Band Hair Tint", Range(0.0, 1.0)) = 0.70
+        _ShadowLift ("Shadow / AO Lift (anti-mud)", Range(0.0, 1.0)) = 0.30
         _ClumpVariation ("Per-Clump Brightness Variation", Range(0.0, 0.5)) = 0.20
         _TipLighten ("Tip Lightening", Range(0.0, 0.6)) = 0.12
+        [Header(Sheen v2 (same settings as the web recipe shader block))]
+        _PrimaryTint ("Primary Highlight Hair Tint", Range(0.0, 1.0)) = 0.20
+        _SecondaryTint ("Secondary Highlight Hair Tint", Range(0.0, 1.0)) = 0.80
+        _ShiftJitter ("Highlight Shift Jitter", Range(0.0, 1.0)) = 0.35
+        _SpecBreakup ("Highlight Breakup By Strand Grooves", Range(0.0, 1.0)) = 0.40
+        _FlowStrength ("Baked Strand Flow Bends Highlight", Range(0.0, 1.5)) = 0.60
 
         [Header(Spherical Head Normal Smoothing)]
         _HeadCenterWS ("Head Center World Position", Vector) = (0.0, 0.865, -0.01, 0.0)
@@ -80,6 +89,7 @@ Shader "AetherStrand/SculptedHair_URP"
         TEXTURE2D(_FlowIdMap);   SAMPLER(sampler_FlowIdMap);
         TEXTURE2D(_NormalMap);   SAMPLER(sampler_NormalMap);
         TEXTURE2D(_AlphaMap);    SAMPLER(sampler_AlphaMap);
+        TEXTURE2D(_StrandFlowMap); SAMPLER(sampler_StrandFlowMap);
 
         // Single shared UnityPerMaterial CBUFFER across all passes (100% SRP-Batcher safe)
         CBUFFER_START(UnityPerMaterial)
@@ -101,6 +111,13 @@ Shader "AetherStrand/SculptedHair_URP"
             float  _ShadowLift;
             float  _ClumpVariation;
             float  _TipLighten;
+            float  _SheenShift;
+            float  _SheenTint;
+            float  _PrimaryTint;
+            float  _SecondaryTint;
+            float  _ShiftJitter;
+            float  _SpecBreakup;
+            float  _FlowStrength;
             float  _HeadCenterBlend;
             float  _StrandVariation;
             float  _RootAO;
@@ -392,15 +409,19 @@ Shader "AetherStrand/SculptedHair_URP"
                     fillCol * ndlFill * 0.40 +
                     rimCol * ndlBack * 0.56) * aoD;
 
-                float shiftTex = (flowId.b - 0.5) * 0.38 + (seed - 0.5) * 0.12;
-                float3 t1 = AS_ShiftTangent(T, perturbedN, _PrimaryShift + shiftTex);
-                float3 t2 = AS_ShiftTangent(T, perturbedN, _SecondaryShift + shiftTex * 1.2);
+                // ---- SHEEN v2 (mirrors hairShadingModel.ts shadeHairPixel and hairShaders.ts) ----
+                float2 strandFlow = SAMPLE_TEXTURE2D(_StrandFlowMap, sampler_StrandFlowMap, sampleUv).rg * 2.0 - 1.0;
+                float3 Tb = normalize(T * max(0.05, strandFlow.y) + B * strandFlow.x * _FlowStrength);
+                float shiftTex = ((flowId.b - 0.5) * 0.38 + (seed - 0.5) * 0.12) * _ShiftJitter;
+                float3 t1 = AS_ShiftTangent(Tb, perturbedN, _PrimaryShift + shiftTex);
+                float3 t2 = AS_ShiftTangent(Tb, perturbedN, _SecondaryShift + shiftTex * 1.2);
 
                 float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
                 float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
+                float breakup = lerp(1.0, (0.24 + 0.76 * fiberCrest) * microGlint, _SpecBreakup);
                 // (no highlight on a root at the skin; a lock with a light root (scalpRoot < 0.5) lies on other hair and keeps
                 // its highlight to the root, so a root left uncovered at a crop's edge isn't a dark dash, as the web)
-                float specMask = lerp(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, scalpRoot)) * (0.24 + 0.76 * fiberCrest) * microGlint * lerp(0.62, 1.0, layerAOv) * lerp(1.0, 0.35, fadeMask);
+                float specMask = lerp(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, scalpRoot)) * breakup * lerp(0.62, 1.0, layerAOv) * lerp(1.0, 0.35, fadeMask);
                 float keyFacing  = smoothstep(-0.14, 0.48, dot(baseN, LKey));
                 float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 
@@ -408,16 +429,15 @@ Shader "AetherStrand/SculptedHair_URP"
                 float spec2 = AS_StrandSpecular(t2, V, LKey, _SecondaryPower) * _SecondaryIntensity;
                 float backSpec = AS_StrandSpecular(t1, V, LRim, _PrimaryPower * 0.78) * _PrimaryIntensity * 0.54;
 
-                float3 spec1Tint = lerp(albedo * 1.55, _PrimarySpecColor.rgb, 0.48);
-                float3 spec2Tint = lerp(albedo * 1.35, _SecondarySpecColor.rgb, 0.48);
+                float3 spec1Tint = lerp(_PrimarySpecColor.rgb, albedo * 1.55, _PrimaryTint);
+                float3 spec2Tint = lerp(_SecondarySpecColor.rgb, albedo * 1.35, _SecondaryTint);
                 float3 specular = (
-                    (spec1Tint * spec1 * 0.56 + spec2Tint * spec2 * 0.44) * keyCol * keyFacing +
+                    (spec1Tint * spec1 + spec2Tint * spec2) * keyCol * keyFacing +
                     spec1Tint * backSpec * rimCol * backFacing) * specMask * rootOcclusion;
 
-                // Soft wide anisotropic sheen band (third Kajiya-Kay lobe, smooth mask: no per-fibre striping)
-                float3 tS = AS_ShiftTangent(T, perturbedN, 0.02 + shiftTex * 0.5);
-                float sheenMask = smoothstep(0.08, 0.30, t) * (0.7 + 0.3 * fiberCrest) * lerp(0.6, 1.0, layerAOv) * (1.0 - fadeMask);
-                float3 sheenTint = lerp(albedo * 2.4, _PrimarySpecColor.rgb, 0.40);
+                float3 tS = AS_ShiftTangent(Tb, perturbedN, _SheenShift + shiftTex * 0.5);
+                float sheenMask = smoothstep(0.08, 0.30, t) * lerp(1.0, 0.7 + 0.3 * fiberCrest, _SpecBreakup) * lerp(0.6, 1.0, layerAOv) * (1.0 - fadeMask);
+                float3 sheenTint = lerp(_PrimarySpecColor.rgb, albedo * 2.4, _SheenTint);
                 specular += sheenTint * sheenMask * _SheenBand *
                     (AS_StrandSpecular(tS, V, LKey, _SheenPower) * keyCol * keyFacing +
                      AS_StrandSpecular(tS, V, LRim, _SheenPower) * rimCol * backFacing * 0.6);

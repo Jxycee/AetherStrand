@@ -351,6 +351,65 @@ up or down to change it (Alt: fine steps; the Soft and Wide brushes spread the c
 leaves a cell as built, arrow keys nudge the focused cell. Warm cells are thicker than the style builds them, cool ones
 thinner. The green grid in the viewport follows the drag; the hair rebuilds when the drag ends. Copy JSON carries the grid.
 
+## Hair sheen (strand highlights)
+
+`src/engine/hairShadingModel.ts` (reference maths) · web: `hairShaders.ts` · Unity: `Shaders/AetherStrand_Hair.shader`
+(ForwardLit). Search for `SHEEN v2` in each: the three must stay the same maths. The preview renderer runs the
+reference, so a preview render is what the viewport and Unity show.
+
+Two highlights that run along the hair, the way real and anime hair catch light (Kajiya-Kay):
+
+- **Primary**: a narrow, near-white streak, shifted toward the tip (`primaryShift`, `primaryPower`, `primaryIntensity`).
+- **Secondary**: a wider streak tinted by the hair colour, shifted toward the root (`secondary*`).
+- **Sheen band**: the soft ring of light across the lit side of the head that anime hair reads by.
+
+The tangent the highlights follow is the lock's direction bent by the baked strand flow map, so the streaks follow
+each strand's wave instead of the card's straight edge. Each clump has its own shift, so neighbouring clumps catch
+light a little higher or lower, which breaks the highlight into pieces instead of one painted stripe.
+
+Recipe `shader` settings (all optional; defaults in `SHEEN_DEFAULTS`). Each has a slider under Shader > Sheen look:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `primaryTint` | 0.2 | 0 = primary uses `primarySpecColor`; 1 = the hair's own colour, brightened. |
+| `secondaryTint` | 0.8 | The same for the secondary. |
+| `sheenStrength` | 0.4 | Brightness of the sheen band. |
+| `sheenPower` | 10 | Sharpness of the sheen band. |
+| `sheenShift` | 0.02 | Moves the sheen band up or down the hair. |
+| `sheenTint` | 0.7 | Colour of the band, from `primarySpecColor` (0) to the hair colour (1). |
+| `shiftJitter` | 0.35 | How much clumps and locks shift their highlights from each other. |
+| `specBreakup` | 0.4 | How much single strands break up the highlight (0 = smooth streak). |
+| `flowStrength` | 0.6 | How much the baked strand flow bends the highlight. |
+| `shadowLift` | 0.3 | Lifts the darkest parts of the hair. |
+| `clumpVariation` | 0.2 | Tone difference between clumps. |
+| `tipLighten` | 0.12 | Lighter tips. |
+
+Unity reads the same keys from the recipe JSON (`AetherStrandSetupWindow.ApplySheen`); a missing key takes the default.
+
+## Hair-card baking (strand atlases)
+
+`src/engine/cardBake.ts` · tool: `tools/cards/bake_cards.ts` · Unity: the PNGs in `Textures/`.
+
+Games draw hair as cards with a texture of real strands on them. The baker draws a few hundred strands in clumps into a
+strip that repeats sideways (512x1024, root at the bottom row), and writes the maps the hair shader reads:
+
+| Map | Channels |
+|---|---|
+| GrooveAO | r: contact shadow between strands and clumps |
+| FlowIDShift | r: strand tone, g: depth (top strand to bottom), b: highlight shift per clump |
+| Normal | from the strand height field |
+| AlphaCard | r: coverage (tips thin out and stagger) |
+| StrandFlow | rg: strand direction, b: strand id, a: clump id |
+
+Recipe `shader.cardBake` (all optional; defaults in `CARD_BAKE_DEFAULTS`, sliders under Shader > Card strands):
+`strands` 520, `clumps` 13, `clumpTightness` 0.55, `strandWidthPx` 2.4, `frizz` 0.004, `wave` 0.012, `tipStagger` 0.6,
+`strays` 0.06, `cardAspect` 0.18, `seed`. `shader.cardTextures: "procedural"` uses the old procedural maps instead.
+
+- The viewport rebakes when a setting changes (about 0.3 s) and the Unity ZIP export carries the result.
+- `npx tsx tools/cards/bake_cards.ts --sheet sheet.png [--recipe r.json]` draws every channel side by side, to check a bake.
+- `npx tsx tools/cards/bake_cards.ts --unity [--recipe r.json]` rewrites the plugin's package textures. The package
+  ships the default bake; a style with its own `cardBake` brings its maps in its ZIP export.
+
 ## Preview renderer (for humans and AI)
 
 `npx tsx tools/preview/cpu_preview.ts --recipe recipe.json --out sheet.png` renders the real lock geometry, with no GPU.
@@ -373,6 +432,10 @@ thinner. The green grid in the viewport follows the drag; the hair rebuilds when
 | `--shell-overlay` | Write `<out>_shell.png`: the shell as a green grid on the render. |
 | `--shell-gaps gaps.json` | With `--ref`: per shell cell, how far its hair edge sits from the reference outline (mm). |
 | `--debug silhouette,roots,fade` | Debug views, one `<out>_<view>.png` each. See below. |
+| `--cards baked\|procedural` | Strand maps for the hair: the card baker (default) or the old procedural maps. See Hair-card baking. |
+| `--sheen legacy` | Shade with the pre-v2 sheen settings and lobe weights, for before/after renders. |
+| `--lights world` | Keep the light rig fixed in the world. By default it turns with each view, so every view is lit from the front. |
+| `--vertex-shade` | The old per-vertex hair shading. By default every hair pixel runs the real hair shader (hairShadingModel.ts). |
 
 ### Debug views (`--debug`)
 

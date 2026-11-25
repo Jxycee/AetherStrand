@@ -126,6 +126,22 @@ export interface ShaderConfig {
   rootAO: number;             // 0 to 1.0
   grooveDepth: number;        // 0.1 to 1.0
   strandVariation: number;    // 0 to 0.40
+  // ---- hair sheen look (optional; missing = SHEEN_DEFAULTS in engine/hairShadingModel.ts; docs/SHARED_TOOLS.md "Hair sheen")
+  primaryTint?: number;       // 0 to 1: primary highlight takes the hair colour (0 = pure primarySpecColor)
+  secondaryTint?: number;     // 0 to 1: same for the wide secondary highlight
+  sheenStrength?: number;     // 0 to 1.5: soft wide sheen band under the two highlights
+  sheenPower?: number;        // 4 to 60: sheen band sharpness (low = wider)
+  sheenShift?: number;        // -0.5 to 0.5: sheen band shift along the strand
+  sheenTint?: number;         // 0 to 1: sheen band takes the hair colour
+  shiftJitter?: number;       // 0 to 1: per-strand highlight shift noise (0 = one clean band per lock)
+  specBreakup?: number;       // 0 to 1: strand grooves break the highlight up
+  flowStrength?: number;      // 0 to 1.5: baked strand directions bend the highlight
+  shadowLift?: number;        // 0 to 1: AO only partly darkens (keeps shaded hair coloured)
+  clumpVariation?: number;    // 0 to 0.5: per-lock brightness / warmth variation
+  tipLighten?: number;        // 0 to 0.5: lighter tips
+  // ---- hair-card strand maps (engine/cardBake.ts; docs/SHARED_TOOLS.md "Hair-card baking")
+  cardTextures?: 'baked' | 'procedural'; // default 'baked'
+  cardBake?: Partial<import('../engine/cardBake').CardBakeSettings>;
 }
 
 export interface PhysicsConfig {

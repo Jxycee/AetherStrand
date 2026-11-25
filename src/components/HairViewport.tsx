@@ -13,7 +13,7 @@ import {
   resolveBackdropHex,
   syncHairShaderUniforms,
 } from '../engine/hairShaders';
-import { createHairTexturePack, HairTexturePack } from '../engine/hairTextures';
+import { createHairTexturePack, HairTexturePack, strandMapsFor, strandMapsKey } from '../engine/hairTextures';
 import {
   BackdropMode,
   CameraPresetId,
@@ -336,6 +336,9 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   const hairSystemRef = useRef<HairPhysicsSystem | null>(null);
   const hairMatRef = useRef<THREE.ShaderMaterial | null>(null);
   const texturePackRef = useRef<HairTexturePack | null>(null);
+  // which strand maps the pack holds (baked settings or procedural), so a recipe change rebakes only when needed
+  const strandKeyRef = useRef<string>('');
+  const maxAnisoRef = useRef<number>(4);
   const bustRigRef = useRef<BustRig | null>(null);
   const simClockRef = useRef(0);
   const renderRigRef = useRef<{
@@ -514,6 +517,22 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   useEffect(() => {
     if (hairMatRef.current) {
       syncHairShaderUniforms(hairMatRef.current, shaderConfig, lightingPreset, visionMode);
+      // card strand maps: rebake when the recipe's cardTextures / cardBake settings change
+      const key = strandMapsKey(shaderConfig);
+      if (key !== strandKeyRef.current && texturePackRef.current) {
+        const old = texturePackRef.current;
+        const pack = createHairTexturePack(maxAnisoRef.current, strandMapsFor(shaderConfig));
+        const u = hairMatRef.current.uniforms;
+        u.uGrooveAoMap.value = pack.grooveAoTexture;
+        u.uFlowIdMap.value = pack.flowIdTexture;
+        u.uNormalMap.value = pack.normalTexture;
+        u.uAlphaMap.value = pack.alphaCardTexture;
+        u.uStrandFlowMap.value = pack.flowTexture;
+        texturePackRef.current = pack;
+        strandKeyRef.current = key;
+        onTexturesReady?.(pack);
+        old.dispose();
+      }
     }
     bustRigRef.current?.setRootTint(shaderConfig.rootColor, shaderConfig.baseColor, shaderConfig.tipColor, shaderConfig.primarySpecColor, shaderConfig.primaryIntensity);
 
@@ -649,8 +668,10 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     bustRigRef.current = bust;
 
     const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-    const texturePack = createHairTexturePack(maxAniso);
+    const texturePack = createHairTexturePack(maxAniso, strandMapsFor(shaderRef.current));
     texturePackRef.current = texturePack;
+    strandKeyRef.current = strandMapsKey(shaderRef.current);
+    maxAnisoRef.current = maxAniso;
     onTexturesReady?.(texturePack);
 
     const hairMaterial = createHairShaderMaterial(

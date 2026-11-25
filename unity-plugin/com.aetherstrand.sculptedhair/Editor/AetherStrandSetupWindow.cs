@@ -26,6 +26,50 @@ namespace AetherStrand.Editor
             public float primaryShift, primaryPower, primaryIntensity;
             public float secondaryShift, secondaryPower, secondaryIntensity;
             public float rimIntensity, rimPower, rootAO, grooveDepth, strandVariation;
+            // Sheen look (web: engine/hairShadingModel.ts HairSheenSettings). Optional in the recipe: a missing key keeps
+            // Unset here and takes SheenDefaults below (JsonUtility leaves missing fields at their initialiser).
+            public float primaryTint = Unset, secondaryTint = Unset, sheenStrength = Unset, sheenPower = Unset, sheenShift = Unset,
+                sheenTint = Unset, shiftJitter = Unset, specBreakup = Unset, flowStrength = Unset, shadowLift = Unset,
+                clumpVariation = Unset, tipLighten = Unset;
+        }
+        private const float Unset = -9999f;
+        /// <summary>Mirrors SHEEN_DEFAULTS in src/engine/hairShadingModel.ts: (recipe key, material property, default).</summary>
+        private static readonly (string key, string prop, float def)[] SheenDefaults =
+        {
+            ("primaryTint", "_PrimaryTint", 0.2f), ("secondaryTint", "_SecondaryTint", 0.8f),
+            ("sheenStrength", "_SheenBand", 0.4f), ("sheenPower", "_SheenPower", 10f), ("sheenShift", "_SheenShift", 0.02f),
+            ("sheenTint", "_SheenTint", 0.7f), ("shiftJitter", "_ShiftJitter", 0.35f), ("specBreakup", "_SpecBreakup", 0.4f),
+            ("flowStrength", "_FlowStrength", 0.6f), ("shadowLift", "_ShadowLift", 0.3f),
+            ("clumpVariation", "_ClumpVariation", 0.2f), ("tipLighten", "_TipLighten", 0.12f),
+        };
+        private static float SheenValue(RecipeShader sh, string key)
+        {
+            if (sh == null) return Unset;
+            switch (key)
+            {
+                case "primaryTint": return sh.primaryTint;
+                case "secondaryTint": return sh.secondaryTint;
+                case "sheenStrength": return sh.sheenStrength;
+                case "sheenPower": return sh.sheenPower;
+                case "sheenShift": return sh.sheenShift;
+                case "sheenTint": return sh.sheenTint;
+                case "shiftJitter": return sh.shiftJitter;
+                case "specBreakup": return sh.specBreakup;
+                case "flowStrength": return sh.flowStrength;
+                case "shadowLift": return sh.shadowLift;
+                case "clumpVariation": return sh.clumpVariation;
+                case "tipLighten": return sh.tipLighten;
+            }
+            return Unset;
+        }
+        /// <summary>Sheen v2 settings onto the hair material: the recipe's value, else the shared default.</summary>
+        private static void ApplySheen(Material mat, RecipeShader sh)
+        {
+            foreach (var (key, prop, def) in SheenDefaults)
+            {
+                float v = SheenValue(sh, key);
+                if (mat.HasProperty(prop)) mat.SetFloat(prop, v <= Unset + 1f ? def : v);
+            }
         }
         [Serializable] private class RecipePhysics
         {
@@ -985,6 +1029,8 @@ namespace AetherStrand.Editor
             TryBindTexture(mat, "_FlowIdMap", "AetherStrand_FlowIDShift");
             TryBindTexture(mat, "_NormalMap", "AetherStrand_Normal");
             TryBindTexture(mat, "_AlphaMap", "AetherStrand_AlphaCard");
+            TryBindTexture(mat, "_StrandFlowMap", "AetherStrand_StrandFlow");
+            ApplySheen(mat, recipe != null ? recipe.shader : null);
 
             if (isNew) AssetDatabase.CreateAsset(mat, outputPath);
             else EditorUtility.SetDirty(mat);
