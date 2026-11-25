@@ -29,6 +29,13 @@
 //   blue nape/under, green sides/back, orange crown/bangs, magenta accents, cyan fade caps; a short line shows the comb
 //   direction), fade (the scalp paint's alpha as a heat map on the bare head: grey none, blue low, green, yellow, red solid;
 //   white contours at 0.25, 0.5 and 0.75).
+//   Comparison look (hybrid plan phase 0): by default the sheet is rendered 3x and box-filtered down (--aa N; 1 when --ref,
+//   --debug or the shell overlays measure pixels), on a mid-grey backdrop with a skin-toned head, and hair and body share
+//   one rig (key upper left of the viewer, fill right, rim behind). --look legacy restores the old navy/plaster/studio
+//   look (with --aa 1 it is byte-identical to earlier renders). --layers writes <out>_layers.png: the first view as base
+//   (ambient only), key only, rim only and full. --turntable: 8 views every 45 degrees instead of the standard set.
+//   --pair refs/style_views.json writes <out>_pair.png: each view after the game reference panel at that angle, framed to
+//   the reference head size by its chin and ear-top landmarks unless --zoom / --cy are given.
 //   --no-hair hides the hair. --grid overlays the scalp coordinate grid on the head (blue |azimuth|, red phi, every 0.1 rad, thick lines at 0.5).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -57,6 +64,17 @@ if (arg('--recipe')) {
   recipe = { presetId: r.basePreset, customName: r.name, builder: r.builder, shader: r.shader, physics: r.physics };
 }
 const outPath = arg('--out', 'preview.png')!;
+// --look game (default): the comparison look. Mid-grey backdrop like the reference sheets, skin-toned head, and one light
+// rig for hair and body alike: key high from the viewer's upper left, soft fill from the right, rim from behind. The rig
+// turns with the view. --look legacy: the old navy backdrop, plaster head and studio rig (hair key from the right while the
+// body's key came from the left), for A/B against earlier renders.
+const look = arg('--look', 'game') === 'legacy' ? 'legacy' : 'game';
+// --aa N: render N times larger and box-filter down (linear light), so alpha-tested tips and the fade dither average out
+// the way MSAA / TAA show them in Unity and the web. Default 3 for review sheets; 1 when a measuring tool runs (--ref,
+// --debug, --shell-overlay, --shell-gaps), since those count pixels at the base size.
+const measuring = ['--ref', '--debug', '--shell-overlay', '--shell-gaps'].some((k) => args.includes(k));
+const AA = Math.max(1, Math.round(Number(arg('--aa', measuring ? '1' : '3'))));
+if (AA > 1 && measuring) throw new Error('--aa > 1 cannot be combined with --ref, --debug or the shell overlays (they measure at the base size)');
 // hair shading: by default every hair pixel is shaded by hairShadingModel.ts (the same maths as the viewport and Unity
 // shaders) with the strand maps the app uses. --vertex-shade: the old per-vertex approximation (faster).
 // --cards baked|procedural picks the strand maps (default: the recipe's shader.cardTextures, else baked);
@@ -109,6 +127,8 @@ const add = (g: THREE.BufferGeometry, m: THREE.Matrix4, hex: string, flat = fals
 // The head lathe pokes through the scalp dome at the crown, so its haired region is painted magenta too:
 // hairline phi (from the crown apex, head-pivot space) by azimuth, front 1.28 -> above the ear 1.62 -> nape 2.1.
 const MAGENTA = new THREE.Color('#ff00ff');
+// skin for --look game: a light warm tone, so the hairline and fade are judged against skin, not grey plaster
+const SKIN = '#e3bfa6', SKIN_EAR = '#dcb398';
 const WHITE = new THREE.Color(1, 1, 1);
 const isScalpRegion = (x: number, y: number, z: number) => {
   const lx = x, ly = y - 0.44 - 0.425, lz = z + 0.01;
@@ -130,12 +150,12 @@ if (headPath) {
   for (const k of Object.keys(headLm)) headLm[k].y += 0.44;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(ch.positions, 3));
-  add(g, P, '#b8b2ae', false, false, true);
+  add(g, P, look === 'game' ? SKIN : '#b8b2ae', false, false, true);
   console.error('head fit', JSON.stringify({ scale: ch.fit.scale, offset: ch.fit.offset, chinY: ch.fit.chinY, landmarks: ch.landmarks }));
 } else {
   const headGeo = new THREE.LatheGeometry([V2(0, 0), V2(0.052, 0.012), V2(0.122, 0.055), V2(0.192, 0.135), V2(0.244, 0.245), V2(0.272, 0.365), V2(0.28, 0.48), V2(0.264, 0.585), V2(0.208, 0.672), V2(0.115, 0.725), V2(0, 0.742)], 48);
   headGeo.scale(0.97, 1.0, 1.09);
-  add(headGeo, P, '#9c8678', false, true, true);
+  add(headGeo, P, look === 'game' ? SKIN : '#9c8678', false, true, true);
   const scalp = new THREE.SphereGeometry(0.286, 48, 32);
   scalp.scale(0.96, 1.08, 1.07);
   // The scalp core pokes slightly out of the face lathe beside the temples. The web tints it to the root colour x0.55,
@@ -146,13 +166,13 @@ if (headPath) {
     const earM = M([side * 0.256, 0.242, -0.028], [0, side * -0.26, side * -0.1], [1, 1, 1], P);
     const outer = new THREE.SphereGeometry(0.062, 18, 14);
     outer.scale(0.28, 1.15, 0.68);
-    add(outer, earM, '#b49482');
+    add(outer, earM, look === 'game' ? SKIN_EAR : '#b49482');
     const helix = new THREE.TorusGeometry(0.04, 0.01, 10, 20, Math.PI * 1.48);
-    add(helix, M([side * 0.008, 0.004, -0.004], [0, side * Math.PI * 0.44, side * -0.42], [1, 1, 1], earM), '#b49482');
+    add(helix, M([side * 0.008, 0.004, -0.004], [0, side * Math.PI * 0.44, side * -0.42], [1, 1, 1], earM), look === 'game' ? SKIN_EAR : '#b49482');
   }
   const neck = new THREE.LatheGeometry([V2(0.145, -0.22), V2(0.118, -0.12), V2(0.112, -0.02), V2(0.122, 0.08)], 28);
   neck.scale(0.96, 1.0, 1.04);
-  add(neck, M([0, 0.01, -0.032], [0, 0, 0], [1, 1, 1], P), '#9c8678');
+  add(neck, M([0, 0.01, -0.032], [0, 0, 0], [1, 1, 1], P), look === 'game' ? SKIN : '#9c8678');
 }
 const torso = new THREE.LatheGeometry([V2(0, 0), V2(0.24, 0), V2(0.36, 0.14), V2(0.41, 0.24), V2(0.34, 0.305), V2(0.175, 0.355), V2(0.145, 0.39), V2(0.132, 0.39), V2(0.12, 0.32)], 40);
 torso.scale(1.12, 1.0, 0.56);
@@ -201,13 +221,18 @@ const paintAlpha = (x: number, y: number, z: number) => {
   return scalpPaintAlpha(dens, paint.grain, grainAt(a.az, a.phi));
 };
 
-const W = 440, H = 480;
+const BW = 440, BH = 480;
+const W = BW * AA, H = BH * AA;
 const views: { name: string; d: THREE.Vector3; up: THREE.Vector3; c: THREE.Vector3; ext: number }[] = [];
 const allViews: typeof views = [];
-for (const [name, yaw] of [['front', 0], ['3q', Math.PI / 4], ['left', -Math.PI / 2], ['back', Math.PI]] as const) {
+// --turntable: 8 views every 45 degrees (t0 = front, t90 = left profile, t180 = back) in place of the standard four + top
+const yaws: (readonly [string, number])[] = args.includes('--turntable')
+  ? [0, 45, 90, 135, 180, 225, 270, 315].map((a) => [`t${a}`, (-a * Math.PI) / 180] as const)
+  : ([['front', 0], ['3q', Math.PI / 4], ['left', -Math.PI / 2], ['back', Math.PI]] as const);
+for (const [name, yaw] of yaws) {
   views.push({ name, d: new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), up: new THREE.Vector3(0, 1, 0), c: new THREE.Vector3(0, 0.66, 0), ext: 0.78 });
 }
-views.push({ name: 'top', d: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, -1), c: new THREE.Vector3(0, 0.0, -0.01), ext: 0.5 });
+if (!args.includes('--turntable')) views.push({ name: 'top', d: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, -1), c: new THREE.Vector3(0, 0.0, -0.01), ext: 0.5 });
 // --views front,back  picks views; --zoom 2 --cy 0.5 frames a close-up (centre height in world metres) for checking tips and partings
 {
   const pickViews = arg('--views');
@@ -216,6 +241,22 @@ views.push({ name: 'top', d: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0
   for (const v of views) {
     v.ext /= zoom;
     if (cy !== undefined && v.name !== 'top') v.c.y = Number(cy);
+  }
+  // --pair without --zoom / --cy: frame the side views so the head is the size and height it is in the reference panels
+  // (chin to ear top, measured on the front panel), otherwise the bust renders smaller than the reference head and
+  // shapes cannot be compared side by side. Bust: chin y 0.44, ear top y ~0.753; --head: its measured landmarks.
+  const pairRef = arg('--pair');
+  if (pairRef && !arg('--zoom') && cy === undefined) {
+    const rs: any = loadRefSheet(pairRef).sheet;
+    const fv = rs.views.front ?? Object.values(rs.views)[0];
+    const lm = fv.landmarks, top = Object.entries(lm).filter(([n]) => n.startsWith('earTop')).map(([, q]: any) => q[1]);
+    if (lm.chin && top.length) {
+      const chinW = headLm?.chin ? headLm.chin.y : 0.44;
+      const earW = headLm ? Math.max(...Object.entries(headLm).filter(([n]) => n.startsWith('earTop')).map(([, q]) => q.y)) : 0.753;
+      const fracSpan = (lm.chin[1] - Math.min(...top)) / fv.crop[3], fracChin = lm.chin[1] / fv.crop[3];
+      const ext = (earW - chinW) / (2 * fracSpan);
+      for (const v of views) if (v.name !== 'top') { v.ext = ext; v.c.y = chinW + (fracChin - 0.5) * 2 * ext; }
+    }
   }
   allViews.push(...views);
   const keep = pickViews ? views.filter((v) => pickViews.split(',').includes(v.name)) : views.slice();
@@ -306,7 +347,25 @@ if (ref && headLm) {
     refFits[name] = { s, tx, ty, got: f.got, use: f.use };
   }
 }
-const bg = [32, 35, 43];
+// The hair's light rig. legacy: the app's studio rig turned with the view (or fixed with --lights world). game: the same
+// key and fill directions the body uses (so hair and head are lit from the same side), studio colours, a rim from behind
+// and above. layerMode isolates one part for the --layers sheet: base (ambient only: colour and form without highlights),
+// key only, rim only, or full.
+let layerMode: 'full' | 'base' | 'key' | 'rim' = 'full';
+function previewLights(viewRot: THREE.Matrix4, key: THREE.Vector3, fill: THREE.Vector3, r: THREE.Vector3, u: THREE.Vector3, d: THREE.Vector3) {
+  const L = look === 'legacy' ? rigLights('studio', lightsWorld ? undefined : viewRot) : rigLights('studio', viewRot);
+  if (look === 'game') {
+    L.keyDir.copy(key);
+    L.fillDir.copy(fill);
+    L.rimDir.copy(r).multiplyScalar(0.3).addScaledVector(u, 0.55).addScaledVector(d, -0.78).normalize();
+  }
+  const off = (c: THREE.Color) => c.setRGB(0, 0, 0);
+  if (layerMode === 'base') { off(L.keyColor); off(L.fillColor); off(L.rimColor); L.ambient.multiplyScalar(1.8); }
+  if (layerMode === 'key') { off(L.fillColor); off(L.rimColor); off(L.ambient); }
+  if (layerMode === 'rim') { off(L.keyColor); off(L.fillColor); off(L.ambient); }
+  return L;
+}
+const bg = look === 'game' ? [118, 119, 122] : [32, 35, 43];
 
 function renderView(vi: number) {
   const v = views[vi];
@@ -497,7 +556,7 @@ function renderView(vi: number) {
   const bodyZ = debugViews.length ? zbuf.slice() : null, bodyCol = debugViews.length ? col.slice() : null, bodyPaint = debugViews.length ? paintBuf.slice() : null, bodyKind = debugViews.length ? kindBuf.slice() : null;
   // per-pixel hair: interpolate the vertex data and shade with hairShadingModel.ts (the viewport / Unity maths)
   const viewRot = new THREE.Matrix4().makeBasis(r, u, d);
-  const env = makeShadeEnv(shaderFull as any, strandMaps, rigLights('studio', lightsWorld ? undefined : viewRot), sheenBase);
+  const env = makeShadeEnv(shaderFull as any, strandMaps, previewLights(viewRot, key, fill, r, u, d), sheenBase);
   const tng = geo.attributes.aHairTangent.array as Float32Array;
   const pin: ShadeInput = { u: 0, t: 0, seed: 0, layerAO: 0, cardMask: 0, scalpRoot: 0, gradT: 0, N: new THREE.Vector3(), headN: new THREE.Vector3(), T: new THREE.Vector3(), V: d.clone() };
   const outC = [0, 0, 0];
@@ -698,6 +757,24 @@ function renderView(vi: number) {
   if (osheet && !outline[v.name]) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const o = (y * W * views.length + vi * W + x) * 3; osheet[o] = sheet[o]; osheet[o + 1] = sheet[o + 1]; osheet[o + 2] = sheet[o + 2]; }
 }
 views.forEach((_, i) => renderView(i));
+// --layers: the first view four times (base, key only, rim only, full) in <out>_layers.png, to judge form shading
+// without the highlight fooling the eye
+let layersSheet: Uint8Array | null = null;
+if (args.includes('--layers')) {
+  const keep = sheet.slice();
+  const modes = ['base', 'key', 'rim', 'full'] as const;
+  layersSheet = new Uint8Array(W * modes.length * H * 3);
+  modes.forEach((m, mi) => {
+    layerMode = m;
+    renderView(0);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const o = (y * W * views.length + x) * 3, q = (y * W * modes.length + mi * W + x) * 3;
+      layersSheet![q] = sheet[o]; layersSheet![q + 1] = sheet[o + 1]; layersSheet![q + 2] = sheet[o + 2];
+    }
+  });
+  layerMode = 'full';
+  sheet.set(keep);
+}
 
 // ---------- PNG ----------
 const crcTable = new Uint32Array(256).map((_, n) => {
@@ -716,8 +793,20 @@ const chunk = (type: string, data: Uint8Array) => {
   const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
   return Buffer.concat([len, td, crc]);
 };
-const SW = W * views.length;
-const writePng = (file: string, px: Uint8Array) => {
+/** box-filter an AA-times-larger sRGB image down to the base size, averaging in linear light */
+const toLin = new Float32Array(256).map((_, i) => { const c = i / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+const toS8 = (c: number) => Math.max(0, Math.min(255, Math.round((c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055) * 255)));
+const downsample = (px: Uint8Array, cols: number) => {
+  if (AA === 1) return px;
+  const sw = W * cols, ow = BW * cols, out = new Uint8Array(ow * BH * 3), n = AA * AA;
+  for (let y = 0; y < BH; y++) for (let x = 0; x < ow; x++) for (let k = 0; k < 3; k++) {
+    let acc = 0;
+    for (let j = 0; j < AA; j++) for (let i = 0; i < AA; i++) acc += toLin[px[((y * AA + j) * sw + x * AA + i) * 3 + k]];
+    out[(y * ow + x) * 3 + k] = toS8(acc / n);
+  }
+  return out;
+};
+const writeRgbPng = (file: string, px: Uint8Array, SW: number, H: number) => {
   const raw = Buffer.alloc((SW * 3 + 1) * H);
   for (let y = 0; y < H; y++) {
     raw[y * (SW * 3 + 1)] = 0;
@@ -727,7 +816,41 @@ const writePng = (file: string, px: Uint8Array) => {
   ihdr.writeUInt32BE(SW, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
   fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', new Uint8Array(0))]));
 };
-writePng(outPath, sheet);
+const SW = W * views.length;
+const writePng = (file: string, px: Uint8Array) => writeRgbPng(file, px, SW, H);
+const finalSheet = downsample(sheet, views.length);
+writeRgbPng(outPath, finalSheet, BW * views.length, BH);
+const layersPath = outPath.replace(/\.png$/i, '') + '_layers.png';
+if (layersSheet) writeRgbPng(layersPath, downsample(layersSheet, 4), BW * 4, BH);
+// --pair refs/style_views.json: each view next to the game reference panel at the same angle, reference first (the
+// game-style reference leads). The panel is scaled to the render height; views the sheet lacks are left out.
+const pairArg = arg('--pair');
+const pairPath = outPath.replace(/\.png$/i, '') + '_pair.png';
+if (pairArg) {
+  const pr = loadRefSheet(pairArg);
+  const named = views.map((v, i) => ({ v, i })).filter(({ v }) => pr.sheet.views[v.name]);
+  const pw = (rv: { crop: number[] }) => Math.round((rv.crop[2] * BH) / rv.crop[3]);
+  const totalW = named.reduce((a, { v }) => a + pw(pr.sheet.views[v.name]) + BW, 0);
+  const out = new Uint8Array(totalW * BH * 3);
+  let x0 = 0;
+  for (const { v, i } of named) {
+    const rv: any = pr.sheet.views[v.name];
+    const [cx, cy, cw, ch] = rv.crop, w = pw(rv);
+    for (let y = 0; y < BH; y++) for (let x = 0; x < w; x++) {
+      const fx = Math.min(cw - 1, Math.floor(((x + 0.5) * cw) / w)), fy = Math.min(ch - 1, Math.floor(((y + 0.5) * ch) / BH));
+      const sx = Math.min(pr.img.w - 1, cx + (rv.mirror ? cw - 1 - fx : fx)), sy = Math.min(pr.img.h - 1, cy + fy);
+      const si = (sy * pr.img.w + sx) * 3, o = (y * totalW + x0 + x) * 3;
+      out[o] = pr.img.rgb[si]; out[o + 1] = pr.img.rgb[si + 1]; out[o + 2] = pr.img.rgb[si + 2];
+    }
+    x0 += w;
+    for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) {
+      const s0 = (y * BW * views.length + i * BW + x) * 3, o = (y * totalW + x0 + x) * 3;
+      out[o] = finalSheet[s0]; out[o + 1] = finalSheet[s0 + 1]; out[o + 2] = finalSheet[s0 + 2];
+    }
+    x0 += BW;
+  }
+  writeRgbPng(pairPath, out, totalW, BH);
+}
 const outlinePath = outPath.replace(/\.png$/i, '') + '_outline.png';
 if (osheet) writePng(outlinePath, osheet);
 if (gapsArg && overlayGrid) {
@@ -750,4 +873,7 @@ console.log(JSON.stringify({
   ...(osheet ? { outline, outlineScore: ov.length ? Math.round((100 * ov.reduce((a, o) => a + o.iou, 0)) / ov.length) : null, outlineImage: outlinePath } : {}),
   ...(ssheet ? { shellImage: shellPath } : {}),
   ...(debugViews.length ? { debugImages: debugPaths } : {}),
+  ...(layersSheet ? { layersImage: layersPath } : {}),
+  ...(pairArg ? { pairImage: pairPath } : {}),
+  look, aa: AA,
 }));

@@ -481,6 +481,11 @@ Recipe `shader.cardBake` (all optional; defaults in `CARD_BAKE_DEFAULTS`, slider
 | `--no-hair` | Hide the hair (head and paint only). |
 | `--grid` | Draw the scalp coordinate grid on the head: blue lines of \|azimuth\|, red lines of phi, every 0.1 rad. |
 | `--lines th:1.43,ph:1.68,...` | Draw only these scalp lines (theta = \|azimuth\|, ph = phi), coloured blue, cyan, red, orange, green, yellow, magenta, white in order. Use it to place landmarks and cut lines on a head. |
+| `--aa N` | Render N times larger and box-filter down in linear light (default 3, or 1 when `--ref`, `--debug` or a shell overlay measures pixels). Tips and the fade dither average out as MSAA/TAA show them. |
+| `--look game\|legacy` | `game` (default): mid-grey backdrop, skin-toned head, hair and body lit by one rig (key upper left, fill right, rim behind). `legacy`: the old navy backdrop, plaster head and studio rig; with `--aa 1` it matches earlier renders exactly. |
+| `--layers` | Also write `<out>_layers.png`: the first view as base (ambient only), key only, rim only and full. |
+| `--turntable` | 8 views every 45 degrees (`t0` front, `t90` left profile, `t180` back) instead of the standard set. |
+| `--pair refs/style_views.json` | Also write `<out>_pair.png`: each view after the game reference panel at that angle, framed to the reference head by its chin and ear-top landmarks (unless `--zoom`/`--cy` are given). |
 | `--ref refs/style_views.json` | Outline score against a reference (needs `--head`). See below. |
 | `--shell grid.json` / `--no-shell` | Use that shape shell instead of the recipe's, or none. See Shape shell. |
 | `--shell-capture grid.json` | Write the hair's current outer heights as an editable shell grid. |
