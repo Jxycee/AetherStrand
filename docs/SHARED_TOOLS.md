@@ -161,6 +161,11 @@ shows as dark teeth along the hairline.
   - `clumpCards` (share of `clumpSpacing`, default 0): one wide pointed card on each clump guide, over the narrow locks,
     so the top reads as a few chunky game-style clumps. Skipped in the fade band, on the back below the crown and at a
     visible whorl.
+  - `flowPoleDrop` (rad, default 0.9): how far below the front hairline the flow's front pole sits. 0.9 gives nearly
+    parallel lines up and back; closer (undercut: 0.3) fans the front out, each side rising up and outward, as stylised
+    game hair does. With a strong sideways `sweep` the front chunks lay flat across the forehead like a brim; the
+    undercut now uses sweep 0.6 (was 1.5), `quiff` 3.5, `quiffBack` 0.25, `stand` 0.65 + 0.5 x spikeLift and
+    `spikeHeight` 0.08 so the front stands off the hairline and the outline is broken by spiky tips.
   - `chunks` (0..1, default 0): game chunks. The clump cards become the main hair: thick, rounded, pointed chunks that
     cover the top, with the narrow locks only as fill under them (the narrow outer layer goes; the under layer thins out
     toward the fade). A row of chunk guides grows from the front hairline itself. None on the sides (se > 0.05), where
@@ -172,7 +177,8 @@ shows as dark teeth along the hairline.
       the points read as teeth hanging on the forehead. Undercut: 0.95.
     - `chunkBury` (m, default 0): the root end starts this far under the scalp, so a chunk grows out of the paint instead
       of showing its cut end (a sawtooth along a diagonal front). Undercut: 0.012.
-    - `chunkEdgeIn` (rad, default 0): away from the front, chunks root at least this far inside the hair edge. Undercut: 0.2.
+    - `chunkEdgeIn` (rad, default 0): away from the front, chunks root at least this far inside the hair edge, and the
+      under layer is dropped wherever no chunk covers it (its ends lay on the undercut as dark leaves). Undercut: 0.3.
     - `chunkFrontWidth` (rad, default 1.0): how far round from the centre the front row runs. At 1.0 the end chunks ran
       back along the temple above the ear and lay edge-on as dark blocks in three-quarter view. Undercut: 0.65.
     - `chunkBackThin` (default 0): the under layer also thins through the tapered back, so the back chunks end in their

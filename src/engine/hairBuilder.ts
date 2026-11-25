@@ -647,6 +647,9 @@ export interface CropFieldOptions {
    * 0..1: game chunks. The clump cards become the main hair: thick, rounded pointed chunks that cover the top, with the
    * narrow locks shortened under them as fill (they show only as darker hair in the gaps). 0 = cards are thin overlays.
    */
+  /** how far (rad) below the front hairline the flow's front pole sits (default 0.9): lower = parallel lines up and back,
+   *  higher (closer to the hairline) = the front fans out */
+  flowPoleDrop?: number;
   chunks?: number;
   /** game chunks: length multiplier for the chunks (1 = about the field locks' length) */
   chunkLength?: number;
@@ -704,7 +707,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   const W = uAt(o.whorl?.[0] ?? Math.PI, o.whorl?.[1] ?? 0.45);
   // front pole, far below the hairline (about at the nose), so the hair flows away from it in nearly parallel lines: straight
   // up and back over the top instead of fanning sideways at the front
-  const F = uAt(0, o.hairPhi(0) + 0.9);
+  // (flowPoleDrop: a pole closer under the hairline fans the front out, each side rising up and outward, as stylised
+  // game hair does, instead of a row of parallel vertical bars)
+  const F = uAt(0, o.hairPhi(0) + (o.flowPoleDrop ?? 0.9));
   // how far (rad) a point is inside the hairline
   const insideHair = (u: THREE.Vector3) => o.hairPhi(azOf(u)) - phiOf(u);
   // tangent direction at u leading away from the point P along the great circle
@@ -892,6 +897,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       // (game chunks: the cards are the outer hair, so the narrow outer locks go; the under layer thins out toward the
       // fade, so the sides show the smooth painted short hair below the chunks instead of a stack of dark leaves)
       if ((o.chunks ?? 0) > 0 && rnd() < (o.chunks ?? 0) * (outer ? 1 : Math.min(1, 2 * se + (o.chunkBackThin ?? 0) * taperAt(u)))) return;
+      // (and none where no chunk covers it: near the side edge the under layer's ends lay on the painted undercut as dark
+      // leaves, seen from three-quarters and the side)
+      if ((o.chunks ?? 0) > 0 && !outer && (se > 0.05 || (1 - frontAzK(az0)) * (o.chunkEdgeIn ?? 0) > insideHair(u))) return;
       const g = nearestGuide(u);
       // the outer layer lies on the hair surface, the under layer below it; a hair's breadth of order between locks
       const layerMul = (outer ? 1 : 0.85) * (g ? g.vol : 1), order = outer ? 0.0015 * rnd() : 0;
@@ -2844,22 +2852,24 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
     // (an uneven front edge: hair meets the forehead along a soft wobble, not a ruled line)
     const wob = undercutHairlineWobble(config);
     cropFieldLocks(specs, {
-      seed: seedU + 33, wMul, sweep: sweepSign * 1.5,
+      seed: seedU + 33, wMul, sweep: sweepSign * 0.6,
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.09, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.1, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.09, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.15, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
       // game look (the stylised reference): the top is chunky pointed pieces (chunks) rising from the hairline, swept up and
       // to the side, spiky tips; the sides are the smooth painted undercut
       // (long chunks, about hairline to crown; wide roots buried in the paint so no cut ends show; none on the side edge or
       // across the temples, where they lay edge-on as dark blocks; the back's under layer gone so the back chunks end in
-      // their own points over the undercut; the front rises a little up and back)
-      chunks: 1, clumpCards: 1, chunkLength: 1.8, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.2, chunkFrontWidth: 0.65, chunkBackThin: 8,
-      spikeHeight: 0.03, quiff: 2.5, quiffBack: 0.3, hairlineWisps: 0,
+      // their own points over the undercut)
+      // (the front stands up off the hairline and fans out, each side rising up and outward, with only a light sideways
+      // sweep: a strong sweep laid the front chunks flat across the forehead like a brim; spiky tips break the outline)
+      chunks: 1, clumpCards: 1.4, chunkLength: 1.8, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.3, chunkFrontWidth: 0.65, chunkBackThin: 8,
+      flowPoleDrop: 0.3, spikeHeight: 0.08, quiff: 3.5, quiffBack: 0.25, hairlineWisps: 0,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 1.2 * (0.02 + 0.016 * config.crownVolume),
-      spike: 0.6 + 0.8 * config.spikeLift, stand: 0.55 + 0.3 * config.spikeLift,
+      spike: 0.6 + 0.8 * config.spikeLift, stand: 0.65 + 0.5 * config.spikeLift,
     });
 
     // The front edge is the textured top meeting the painted hairline (forehead clear, tips lifted), as in the reference.
