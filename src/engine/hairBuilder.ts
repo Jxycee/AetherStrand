@@ -2595,7 +2595,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, spikeHeight: 0.035, clumpCards: 0.8, quiffBack: 0.9, quiff: 6.5, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 0.9, quiff: 6.5, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,
