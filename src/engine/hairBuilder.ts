@@ -664,6 +664,14 @@ export interface CropFieldOptions {
   /** game chunks: the under layer thins out through the tapered back too, so the back chunks end in their own points
    *  instead of over a ragged fringe of narrow locks */
   chunkBackThin?: number;
+  /** game chunks: where along a chunk its point starts tapering (0..1, default 0.3); later = a short point, not a long thin streak */
+  chunkTip?: number;
+  /** game chunks: front-row chunks start up to this far (rad) lower than the hairline, at random, for an uneven peaked front edge */
+  chunkFrontJag?: number;
+  /** game chunks: spacing of the front row of chunks (default clumpSpacing); closer than the field so the front shows no paint between them */
+  chunkFrontSpacing?: number;
+  /** game chunks: how late along a chunk the spike lift comes in (power of t, default 2); higher = only the tip leaves the surface */
+  chunkSpikePow?: number;
   /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
   colorRange?: [number, number];
   /**
@@ -864,11 +872,12 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   // game chunks: a row of guides along the front hairline, so the front's chunks grow from the hairline itself instead of
   // leaving a strip of paint in front of the first row of field guides
   if ((o.chunks ?? 0) > 0) {
-    const step = (o.clumpSpacing ?? 0.055) / 0.3 * 0.75;
+    const step = (o.chunkFrontSpacing ?? o.clumpSpacing ?? 0.055) / 0.3 * 0.75;
     const fw = o.chunkFrontWidth ?? 1.0;
     for (let az = -fw; az <= fw; az += step / Math.max(0.3, Math.sin(o.hairPhi(0)))) {
       const a = az + (rnd() - 0.5) * step * 0.3;
-      const u = uAt(a, o.hairPhi(a) + 0.03);
+      // (chunkFrontJag: each chunk starts a random way lower, so the front edge is a row of uneven peaks, not a ruled band)
+      const u = uAt(a, o.hairPhi(a) + 0.03 + (o.chunkFrontJag ?? 0) * Math.pow(rnd(), 1.5));
       const fk = frontK(u);
       const twist = o.pieceTwist ? o.pieceTwist * (rnd() * 2 - 1) * (1 - fk) : 0;
       const path = march(u, L0, fk, twist);
@@ -1021,7 +1030,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         const rise = _ss(t / 0.25);
         // (game chunks: the root end starts under the scalp, so the chunk grows out of the painted short hair instead of
         // showing its cut end, which along the diagonal front read as a sawtooth and above the ear as dark blocks)
-        const h = (chunkK > 0 ? THREE.MathUtils.lerp(-(o.chunkBury ?? 0), 0.0025, _ss(t / 0.2)) : 0.0025) + (hairSurface(cu) * g.vol + 0.003) * rise + g.spike * (o.spikeHeight ?? 0.02) * Math.pow(t, 2);
+        const h = (chunkK > 0 ? THREE.MathUtils.lerp(-(o.chunkBury ?? 0), 0.0025, _ss(t / 0.2)) : 0.0025) + (hairSurface(cu) * g.vol + 0.003) * rise + g.spike * (o.spikeHeight ?? 0.02) * Math.pow(t, chunkK > 0 ? (o.chunkSpikePow ?? 2) : 2);
         const qh = quiffAt(cu) * g.vol * rise;
         const base = surf(cu, 0);
         const nrm = surf(cu, 1).sub(base).normalize();
@@ -1035,7 +1044,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         // pointed: the taper starts early so each clump narrows to one tip
         // (a card lies on the locks, not on the skin: a light root like the outer locks'. With the usual dark root every
         // card's first fifth read as a dark leaf on the side of the top)
-        tipStart: 0.45 - 0.15 * chunkK, lockNormal: false, scalpRoot: 0.2, rootWidth: chunkK > 0 ? (o.chunkRoot ?? (g.front ? 0.8 : 0.36)) : undefined, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        tipStart: chunkK > 0 ? (o.chunkTip ?? 0.45 - 0.15 * chunkK) : 0.45, lockNormal: false, scalpRoot: 0.2, rootWidth: chunkK > 0 ? (o.chunkRoot ?? (g.front ? 0.8 : 0.36)) : undefined, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
         shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
         colorRange: o.colorRange ?? [0.3, 0.75],
       });
@@ -1228,7 +1237,7 @@ export function undercutFadePaint(config: HairBuilderConfig): ScalpPaint {
 }
 /** The uneven front edge of undercut-fade, shared by its locks and its painted strip. */
 export function undercutHairlineWobble(config: HairBuilderConfig): (az: number) => number {
-  return hairlineWobble(0.015, (config.seed || 1337) * 0.001);
+  return hairlineWobble(0.04, (config.seed || 1337) * 0.001);
 }
 /** undercut-fade paint before extendFrontPaint: the cut the hair is built to. */
 export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 0.3): ScalpPaint {
@@ -2856,7 +2865,7 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.09, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.15, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.11, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.08, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
       // game look (the stylised reference): the top is chunky pointed pieces (chunks) rising from the hairline, swept up and
       // to the side, spiky tips; the sides are the smooth painted undercut
       // (long chunks, about hairline to crown; wide roots buried in the paint so no cut ends show; none on the side edge or
@@ -2864,8 +2873,12 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // their own points over the undercut)
       // (the front stands up off the hairline and fans out, each side rising up and outward, with only a light sideways
       // sweep: a strong sweep laid the front chunks flat across the forehead like a brim; spiky tips break the outline)
-      chunks: 1, clumpCards: 1.4, chunkLength: 1.8, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.3, chunkFrontWidth: 0.65, chunkBackThin: 8,
-      flowPoleDrop: 0.3, spikeHeight: 0.08, quiff: 3.5, quiffBack: 0.25, hairlineWisps: 0,
+      // (fewer, wider chunks that overlap in tiers rather than many separate strokes; short points that lift only at the
+      // tip, so no long thin streaks fly off the top; a close front row whose chunks start at uneven heights, so the
+      // front edge is a row of peaks instead of a ruled band)
+      chunks: 1, clumpCards: 1.6, chunkLength: 1.8, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.3, chunkFrontWidth: 0.65, chunkBackThin: 20,
+      chunkTip: 0.55, chunkSpikePow: 3, chunkFrontSpacing: 0.055, chunkFrontJag: 0.05,
+      flowPoleDrop: 0.3, spikeHeight: 0.06, quiff: 3.5, quiffBack: 0.25, hairlineWisps: 0,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 1.2 * (0.02 + 0.016 * config.crownVolume),

@@ -182,7 +182,15 @@ shows as dark teeth along the hairline.
     - `chunkFrontWidth` (rad, default 1.0): how far round from the centre the front row runs. At 1.0 the end chunks ran
       back along the temple above the ear and lay edge-on as dark blocks in three-quarter view. Undercut: 0.65.
     - `chunkBackThin` (default 0): the under layer also thins through the tapered back, so the back chunks end in their
-      own points over the undercut instead of over a ragged fringe of narrow locks. Undercut: 8.
+      own points over the undercut instead of over a ragged fringe of narrow locks. Undercut: 20.
+    - `chunkTip` (0..1, default 0.3): where a chunk's point starts tapering. Early tapering plus a spike lift drew long thin
+      streaks off the top in side view; 0.55 gives short points. `chunkSpikePow` (default 2): the spike lift's power of t;
+      3 lifts only the tip. Undercut: 0.55 and 3, with `spikeHeight` 0.06.
+    - `chunkFrontSpacing` (default `clumpSpacing`): spacing of the front row. With wider field chunks (undercut
+      `clumpSpacing` 0.11, `clumpCards` 1.6: fewer chunks overlapping in tiers) the front row needs its own closer spacing
+      or paint shows between its chunks. Undercut: 0.055.
+    - `chunkFrontJag` (rad, default 0): each front-row chunk starts a random way lower than the hairline, so the front edge
+      is a row of uneven peaks rather than a ruled band. Undercut: 0.05, with `undercutHairlineWobble` 0.04.
   - `combDown` (0..1, default 0) with `whorlRadius: 0`: a combed-back crop has no visible whorl, so behind the ears the
     hair is combed straight down from where the top turns over the crown. Without it, flow away from the front meets
     again on the back of the head (a starburst), and a crown whorl in front of the back hair either crumples where the
