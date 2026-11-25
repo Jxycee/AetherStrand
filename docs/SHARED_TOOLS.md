@@ -212,9 +212,9 @@ shows as dark teeth along the hairline.
     under a separate top, not one dark helmet (0.18 left solid paint to the cut line; 0.6 went too pale and high).
     `backTaper` is 0.3 with `taperShade` 0: the back keeps longer pointed pieces that end over the fade, like the
     stylised reference, instead of a flat dark skirt. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
-    painted side crisp. The hairline is `roundedHairline(1.1, 0.07, 0.75)` with `templeRecede` 0.1: a soft curve across
+    painted side crisp. The hairline is `roundedHairline(0.98, 0.03, 0.75)` with `templeRecede` 0.03 (more corner lift and temple recession scored lower against the references, which keep a fairly straight hairline with full temples): a soft curve across
     the forehead with a small recession at each temple corner (a straight 0.02 lift read as a cap brim in the 3/4 view),
-    plus `hairlineWobble(0.015)`. The top's `volume` is 0.75 of the old value and `spikeHeight` 0.045, for a tighter
+    plus `hairlineWobble(0.015)`. `sweep` 1.5 (was 0.9): seen from the front the top leans to one side instead of standing in vertical bars. The top's `volume` is 0.75 of the old value and `spikeHeight` 0.045, for a tighter
     crown; measured against the bald head, the back already lies close to the skull.
   - Every crop lock starts 3.2 mm off the scalp ellipsoid (was 2.5 mm), so nodes that cross the temple bulge on a
     character skull clear it after the conform.
@@ -229,6 +229,10 @@ shows as dark teeth along the hairline.
   - Outer-layer locks have `scalpRoot` 0.2 (they lie on other hair, not skin), so their roots keep a light shade; the
     shaders darken the root by `rootAO x 0.72 x scalpRoot`. A full root shade under every row of tips doubled up with the
     layer shading as dark wedges.
+  - `hairlineWisps` (0..2, default 0): fine short hairs along the front hairline, rooted from just outside the lock edge
+    (on the painted strip) to a little inside it, lying up and back with the flow at random small angles. The front
+    row's ribbons leave the skin as a row of small teeth along one line; the wisps break that into a soft, uneven edge.
+    Their roots stay light (`scalpRoot` 0.05): a dark root drew a thin dark line along the forehead (undercut: 1).
   - Locks stop at the edge. (v7 turned them to run along it; they crossed the combed-down hair above the ear as dark
     hooks, and the hairline row covers the front edge better.) The fade band thins locks less (squared), so the temples
     don't show lone locks on the paint.
