@@ -13,6 +13,7 @@ Shader "AetherStrand/ScalpPaint"
         _GrainCell ("Grain Cell (rad)", Range(0.001, 0.02)) = 0.004
         _Irregularity ("Hairline Irregularity", Range(0, 1)) = 0.5
         _Streaks ("Strand Streaks", Range(0, 1)) = 1
+        _UnderShade ("Shade Under The Hair", Range(0, 1)) = 0
     }
     SubShader
     {
@@ -35,7 +36,7 @@ Shader "AetherStrand/ScalpPaint"
             TEXTURE2D(_Curves); SAMPLER(sampler_Curves);
             CBUFFER_START(UnityPerMaterial)
                 half4 _Color;
-                float _Feather, _Density, _Grain, _GrainCell, _Irregularity, _Streaks;
+                float _Feather, _Density, _Grain, _GrainCell, _Irregularity, _Streaks, _UnderShade;
             CBUFFER_END
 
             // web scalp ellipsoid (HEAD_CENTER_LOCAL, SCALP_RX/RY/RZ)
@@ -102,6 +103,8 @@ Shader "AetherStrand/ScalpPaint"
                 float sy = phi / 0.03, ib = floor(sy), sf = sy - ib;
                 float streak = lerp(h11(ia * 157.0 + ib * 113.0), h11(ia * 157.0 + (ib + 1.0) * 113.0), sf * sf * (3.0 - 2.0 * sf));
                 float sk = lerp(1.0, 0.82 + 0.36 * streak, _Streaks);
+                // mirrors paintUnderShade: darker under the hair, the shadow of the locks above (UNDER_SHADE_BAND 0.2)
+                sk *= 1.0 - _UnderShade * (1.0 - smoothstep(full - 0.2, full, phi));
                 Light L = GetMainLight();
                 float ndl = clamp(dot(normalize(i.nW), L.direction) * 0.5 + 0.6, 0.35, 1.0);
                 half3 col = (_Color.rgb * ndl * max(0.6h, (half3)L.color) + _Color.rgb * SampleSH(normalize(i.nW)) * 0.25h) * sk;

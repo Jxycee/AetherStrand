@@ -19,8 +19,8 @@
  },
  "shader": {
   "rootColor": "#0e0a07",
-  "baseColor": "#241d18",
-  "tipColor": "#31281f",
+  "baseColor": "#2b2622",
+  "tipColor": "#3a332d",
   "primarySpecColor": "#6e6258",
   "secondarySpecColor": "#4a3a30",
   "primaryShift": 0.05,

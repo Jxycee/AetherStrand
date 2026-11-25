@@ -20,7 +20,7 @@ import * as THREE from 'three';
 import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 import { generateRandomHairstyle, scalpRegionPhi } from '../../src/engine/hairBuilder';
 import { loadCharacterHead } from '../../src/engine/characterHead';
-import { evalScalpPaint, paintStreak, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
+import { evalScalpPaint, hairlineJag, paintStreak, paintUnderShade, sampleArr, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
 
 const args = process.argv.slice(2);
 const arg = (k: string, d?: string) => {
@@ -224,7 +224,11 @@ function renderView(vi: number) {
           const lx = w0 * wp[0][0] + w1 * wp[1][0] + w2 * wp[2][0], ly = w0 * wp[0][1] + w1 * wp[1][1] + w2 * wp[2][1] - 0.44, lz = w0 * wp[0][2] + w1 * wp[1][2] + w2 * wp[2][2];
           const al = paintAlpha(lx, ly, lz);
           let st = 1;
-          if (al > 0) { const sa = scalpAngles(lx, ly, lz); st = 0.82 + 0.36 * paintStreak(sa.az, sa.phi); }
+          if (al > 0) {
+            const sa = scalpAngles(lx, ly, lz); st = 0.82 + 0.36 * paintStreak(sa.az, sa.phi);
+            // darker under the hair, as the web and Unity shaders (paintUnderShade)
+            if (paint?.underShade) st *= paintUnderShade(paint.underShade, sa.phi - hairlineJag(paint.irregularity ?? 0.5, sa.az), sampleArr(paint.fullPhi, sa.az));
+          }
           col[idx * 3] = k * (skin[0] + (cPaint.r * st - skin[0]) * al);
           col[idx * 3 + 1] = k * (skin[1] + (cPaint.g * st - skin[1]) * al);
           col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * st - skin[2]) * al);
@@ -295,6 +299,7 @@ function renderView(vi: number) {
   const HN = new THREE.Vector3(), BN = new THREE.Vector3();
   // highlights as the viewport shader draws them (hairShaders.ts): primary lobe at the recipe's power and intensity, gated by
   // a normal blended 42% toward the head normal (not the raw card normal, which dots every lock), plus the wide sheen band
+  const rootAO = sh.rootAO ?? 0.74;
   const pPow = sh.primaryPower ?? 76, pInt = sh.primaryIntensity ?? 0.32, sPow = sh.secondaryPower ?? 24, sInt = sh.secondaryIntensity ?? 0.2;
   const sstepK = (e0: number, e1: number, x: number) => { const c = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return c * c * (3 - 2 * c); };
   // --no-hair: head, paint and grid only
@@ -317,7 +322,10 @@ function renderView(vi: number) {
     const effRoot = cBase.clone().lerp(cRoot, scalpRootA[i]);
     const base = gt < 0.28 ? effRoot.lerp(cBase, sstep(0, 0.28, gt)) : cBase.clone().lerp(cTip, sstep(0.28, 1, gt));
     const isShell = card[i] === 0;
-    const aoK = (isShell ? 0.55 : 0.62 + 0.38 * ao[i]) * (0.72 + 0.28 * a);
+    // root occlusion and layer AO as hairShaders.ts: the root darkens by rootAO x 0.72 x scalpRoot over the first 22% of
+    // the lock (so a lock with a low scalpRoot, like an outer layer over other hair, keeps a light root)
+    const rootOcc = isShell ? 0.72 + 0.28 * a : (1 - rootAO * 0.72 * scalpRootA[i]) + (rootAO * 0.72 * scalpRootA[i]) * sstep(0, 0.22, t);
+    const aoK = (isShell ? 0.55 : 0.72 + 0.32 * ao[i]) * rootOcc;
     HN.set(headNA[i * 3], headNA[i * 3 + 1], headNA[i * 3 + 2]).normalize();
     BN.copy(N).lerp(HN, 0.42).normalize();
     // diffuse on the normal blended toward the head normal, as hairShaders.ts lights it (perturbedN from baseN): the raw

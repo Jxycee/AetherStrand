@@ -18,6 +18,15 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 - A style can supply its own in `SCALP_PAINT_BY_ARCHETYPE` (hairBuilder.ts), for example `fadeScalpPaint` below.
 - Exported in PresetGeometry.json as `scalpPaint`. The Unity importer builds a thin shell over the character's head skin
   (head-weighted triangles) and draws the paint there. Menu: Tools > AetherStrand > Rebuild Scalp Paint On Selected Character.
+- `underShade` (0..1, default 0): the paint is darker under the hair, easing in over `UNDER_SHADE_BAND` (0.2 rad) above
+  `fullPhi`: the shadow the locks cast on the short hair below them. Without it, the paint between lock tips is lit like
+  open short hair and comes out lighter than the locks, so every tip over it reads as a dark leaf (the undercut's side
+  wedges). `paintUnderShade` in scalpPaint.ts; mirrored in scalpPaintMaterial.ts and the Unity shader (`_UnderShade`,
+  read from the JSON as `underShade`). Undercut: 0.5.
+- `extendFrontPaint(paint, reach, width)` (hairBuilder.ts): moves the paint's full and edge lines `reach` rad down the
+  forehead. Lock roots along a front hairline leave the scalp as a row of small teeth; on full-density paint they sit on
+  hair colour instead of the paint's thin edge. Build the hair from the unextended cut (undercut:
+  `undercutFadeBasePaint`, reach 0.035).
 
 ### Hairline look (all styles)
 
@@ -145,6 +154,19 @@ shows as dark teeth along the hairline.
     is. A narrow turn bends each lock crossing it and the bent ends read as a row of dark crescents (undercut: 1.4).
   - `sideSpikeCut` (0..1, default 0): spiked tips fade out beyond |azimuth| 1.0 to 1.4, so the side of the top lies flat
     and the three-quarter silhouette isn't hairy at the side.
+  - `turnTaper` (default 0): in the turn from combed back to combed down (|azimuth| 0.9 to 2.2) tips taper sooner, so
+    they melt into the layer below instead of ending as hard wedges (undercut: 0.15).
+  - `tufts` (0..1, default 0): share of the top's clump guides that are tufts. Their outer locks are about half as long
+    and lift early (t^1.6 instead of t^3) with 0.8 to 1.4 times the spike height, so the top is a base cap with shorter
+    tufts standing out of it rather than one brushed sheet (undercut: 0.4).
+  - `surfaceNoise` (m, default 0): low-frequency rises and dips of the hair surface by position on the head, so light
+    falls in broad patches (undercut: 0.006).
+  - `centreArch` (m, default 0): the middle third of the front stands higher than the temples, so the front has an arched
+    silhouette instead of a flat block (undercut: 0.02).
+  - `sideUnderLight` (0..1, default 0): on the sides the under layer is shaded like the outer one, with a lighter root.
+  - Outer-layer locks have `scalpRoot` 0.2 (they lie on other hair, not skin), so their roots keep a light shade; the
+    shaders darken the root by `rootAO x 0.72 x scalpRoot`. A full root shade under every row of tips doubled up with the
+    layer shading as dark wedges.
   - Locks stop at the edge. (v7 turned them to run along it; they crossed the combed-down hair above the ear as dark
     hooks, and the hairline row covers the front edge better.) The fade band thins locks less (squared), so the temples
     don't show lone locks on the paint.
@@ -217,3 +239,5 @@ Colour and highlights follow the web hair shader: root colour blended by `scalpR
 `colorRange`, and the same specular lobes (tilted toward the head normal and masked near the root), so speckle seen in
 the preview is in the app too. Diffuse light also uses the normal blended 42% toward the head normal, as the app does;
 with the raw card normal, cards seen edge-on showed as black leaves the app never draws.
+Root occlusion and layer AO follow the web shader too: the root darkens by `rootAO x 0.72 x scalpRoot` over the first
+22% of the lock, and layer AO scales by 0.72 + 0.32 x `layerAO`. The paint's `underShade` is drawn as in the app.

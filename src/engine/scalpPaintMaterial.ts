@@ -30,6 +30,7 @@ const frag = /* glsl */ `
   uniform vec3 uRadii;
   uniform vec3 uLightDir;
   uniform float uIrreg;
+  uniform float uUnderShade;
   varying vec3 vLocal;
   varying vec3 vNormalW;
   varying vec3 vPosW;
@@ -76,7 +77,9 @@ const frag = /* glsl */ `
     float ia = floor((az + 3.14159265) / 0.006);
     float sy = phi / 0.03, ib = floor(sy), sf = sy - ib;
     float streak = mix(h11(ia * 157.0 + ib * 113.0), h11(ia * 157.0 + (ib + 1.0) * 113.0), sf * sf * (3.0 - 2.0 * sf));
-    gl_FragColor = vec4(uColor * ndl * (0.82 + 0.36 * streak), a);
+    // paintUnderShade: darker under the hair, the shadow of the locks above
+    float under = 1.0 - uUnderShade * (1.0 - smoothstep(full - 0.2, full, phi));
+    gl_FragColor = vec4(uColor * ndl * (0.82 + 0.36 * streak) * under, a);
     #include <colorspace_fragment>
   }
 `;
@@ -120,6 +123,7 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
       uLightDir: { value: new THREE.Vector3(-0.4, 0.8, 0.6) },
       uLift: { value: lift },
       uIrreg: { value: 0.5 },
+      uUnderShade: { value: 0 },
     },
   });
   let meshes: THREE.Mesh[] = [];
@@ -143,6 +147,7 @@ export function createScalpPaintOverlay(lift = 0.0015): ScalpPaintOverlay {
       mat.uniforms.uDensity.value = p.density;
       mat.uniforms.uGrain.value = p.grain;
       mat.uniforms.uIrreg.value = p.irregularity ?? 0.5;
+      mat.uniforms.uUnderShade.value = p.underShade ?? 0;
     },
     setColor(rootHex, baseHex, tipHex, specHex, specIntensity) {
       hairCol = [rootHex, baseHex, tipHex, specHex, specIntensity];

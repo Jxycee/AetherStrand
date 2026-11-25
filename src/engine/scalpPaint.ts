@@ -35,6 +35,10 @@ export interface ScalpPaint {
   irregularity?: number;
   /** '#rrggbb' paint colour override; absent = the hair's own colour. */
   color?: string;
+  /** 0..1, default 0: how much darker the paint is under the hair (from UNDER_SHADE_BAND above fullPhi upward), the
+   *  shadow the locks cast on the short hair below them. Without it the paint between lock tips is lit like open short hair
+   *  and lighter than the locks, so every tip over it reads as a dark leaf. */
+  underShade?: number;
 }
 
 /** Hairline softness and colour controls shared by every style (HairBuilderConfig.hairlineSoftness / scalpColor). */
@@ -114,6 +118,19 @@ export function paintRamp(phi: number, full: number, edge: number, ed: number, f
   };
   const d = phi <= edge ? herm((phi - full) / h0, 1, ed, 0, m1, h0) : herm((phi - edge) / h1, ed, 0, m1, 0, h1);
   return Math.max(0, Math.min(1, d));
+}
+
+/** Width (rad) over which the under-hair shade eases in, from fullPhi up toward the crown. Mirrored in the GLSL and Unity shader. */
+export const UNDER_SHADE_BAND = 0.2;
+
+/**
+ * Brightness factor (0..1) of the paint under the hair: 1 - underShade at UNDER_SHADE_BAND or more above fullPhi, easing
+ * to 1 at fullPhi. `phi` is the jagged phi (as evalScalpPaint uses it). Mirrored in scalpPaintMaterial.ts and the Unity
+ * AetherStrand/ScalpPaint shader.
+ */
+export function paintUnderShade(underShade: number, phi: number, full: number): number {
+  if (underShade <= 0) return 1;
+  return 1 - underShade * (1 - ss((phi - (full - UNDER_SHADE_BAND)) / UNDER_SHADE_BAND));
 }
 
 /**

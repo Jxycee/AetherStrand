@@ -105,6 +105,8 @@ namespace AetherStrand
         public double feather = 0.035, density = 1.0, grain = 0.5;
         /// <summary>0..1 hairline unevenness (HairlineJag). Default 0.5.</summary>
         public double irregularity = 0.5;
+        /// <summary>0..1 darkening of the paint under the hair (paintUnderShade in scalpPaint.ts). Default 0.</summary>
+        public double underShade = 0.0;
         /// <summary>Optional colour override ('#rrggbb' in the JSON); null = the hair's own colour (see AetherStrandScalpPaint).</summary>
         public string color;
 
@@ -201,6 +203,7 @@ namespace AetherStrand
                 density = AetherStrandJson.D(d, "density", 1.0),
                 grain = AetherStrandJson.D(d, "grain", 0.5),
                 irregularity = AetherStrandJson.D(d, "irregularity", 0.5),
+                underShade = AetherStrandJson.D(d, "underShade", 0.0),
                 color = d.ContainsKey("color") ? d["color"] as string : null,
             };
             p.bins = p.fullPhi.Length;
