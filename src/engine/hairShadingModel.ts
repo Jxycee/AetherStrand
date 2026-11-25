@@ -139,6 +139,27 @@ const sstep = (e0: number, e1: number, x: number) => { const c = clamp01((x - e0
 const mix = (a: number, b: number, k: number) => a + (b - a) * k;
 const fract = (x: number) => x - Math.floor(x);
 
+/** Strand card coverage (hybrid fine strands): a few separate hairs across the lock instead of the dense alpha card.
+ * u runs round the lens profile (hairPhysics PROFILE_U: top centre 0, side 0.34, bottom centre 0.5, side 0.66), so u is first
+ * turned back into the lateral position across the lock, which puts each hair on both faces at the same place. 3 hairs
+ * per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
+ * offset, sway, taper and length from the lock seed.
+ *  Mirrors strandCardAlpha in hairShaders.ts and AetherStrandCardAlpha in AetherStrand_Hair.shader. */
+export function strandCardAlpha(u: number, t: number, seed: number): number {
+  const x = u < 0.17 ? (u / 0.17) * 0.76 : u < 0.34 ? mix(0.76, 1, (u - 0.17) / 0.17) : u < 0.5 ? mix(1, 0, (u - 0.34) / 0.16)
+    : u < 0.66 ? mix(0, -1, (u - 0.5) / 0.16) : u < 0.83 ? mix(-1, -0.76, (u - 0.66) / 0.17) : mix(-0.76, 0, (u - 0.83) / 0.17);
+  const sn = (x * 0.5 + 0.5) * 3;
+  const cell = Math.min(Math.floor(sn), 2);
+  const f = sn - cell;
+  const h1 = fract(Math.sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
+  const h2 = fract(Math.sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
+  const len = 0.7 + 0.3 * h2;
+  if (t > len) return 0;
+  const c = 0.5 + (h1 - 0.5) * 0.4 + Math.sin(t * (4 + 4 * h2) + h1 * 6.2832) * 0.12;
+  const wd = 0.13 * (1 - 0.7 * sstep(0.4, len, t));
+  return 1 - sstep(wd * 0.6, wd, Math.abs(f - c));
+}
+
 /**
  * Bilinear sample of an RGBA8 strand map, GL convention (v = 0 is the BOTTOM image row; three.js flipY and Unity both
  * sample that way). U repeats, V clamps. Writes 0..1 values into out.
@@ -183,7 +204,10 @@ export function shadeHairPixel(p: ShadeInput, e: ShadeEnv, out: number[]): numbe
     fadeU0 = sstep(fs, 1, t);
   }
   const su = p.u * 0.92 + p.seed * 3.13;
-  if (p.cardMask > 0.5 && t > 0.58) {
+  if (p.cardMask > 0.5 && p.cardMask < 0.9) {
+    // strand card (hybrid fine strands): same cut as hairShaders.ts strandCardAlpha
+    if (strandCardAlpha(p.u, t, p.seed) < 0.36) return null;
+  } else if (p.cardMask > 0.5 && t > 0.58) {
     const strandAlpha = sampleMap(tex.alphaCard, w, h, su, t, _tmp.a)[0];
     const edgeDist = Math.min(Math.abs(p.u - 0.34), Math.abs(p.u - 0.66));
     const lateralFray = sstep(0, 0.075, edgeDist);

@@ -30,6 +30,7 @@ export function exportGeometry(recipe: any): any {
     e.stiffnessWeight = lk.particles.map((p: any) => p.stiffnessWeight);
     // Mesh-shape fields the plugin reads (AetherStrandWebData.cs); written only when set so legacy exports are unchanged.
     if (lk.isFadeCap) e.isFadeCap = true;
+    if (lk.strandCard) e.strandCard = true;
     if (lk.fadeStart !== undefined) e.fadeStart = lk.fadeStart;
     if (lk.smooth !== undefined && lk.smooth > 1) e.smooth = lk.smooth;
     if (lk.roundness !== undefined && lk.roundness > 0) e.roundness = lk.roundness;
@@ -49,7 +50,7 @@ export function exportGeometry(recipe: any): any {
     presetId: recipe.presetId,
     presetName: recipe.customName ?? recipe.presetId,
     coordinateSystem: 'blender_z_up_neg_y_front',
-    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine,shadeDir,rootWidth when set',
+    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,strandCard,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine,shadeDir,rootWidth when set',
     lockCount: exported.length,
     // Painted short-hair layer under the locks (scalpPaint.ts); the plugin builds a scalp shell from the character's head.
     ...(hair.scalpPaint ? { scalpPaint: hair.scalpPaint } : {}),

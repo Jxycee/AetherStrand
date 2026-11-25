@@ -224,6 +224,26 @@ const FRAGMENT_SHADER = /* glsl */ `
     return smoothstep(fs, 1.0, t);
   }
 
+  // Strand card coverage (hybrid fine strands): a few separate hairs across the lock instead of the dense alpha card.
+  // u runs round the lens profile (hairPhysics PROFILE_U: top centre 0, side 0.34, bottom centre 0.5, side 0.66), so u is first
+  // turned back into the lateral position across the lock, which puts each hair on both faces at the same place. 3 hairs
+  // per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
+  // offset, sway, taper and length from the lock seed.
+  float strandCardAlpha(float u, float t, float seed) {
+    float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? mix(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? mix(1.0, 0.0, (u - 0.34) / 0.16)
+            : u < 0.66 ? mix(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? mix(-1.0, -0.76, (u - 0.66) / 0.17) : mix(-0.76, 0.0, (u - 0.83) / 0.17);
+    float sn = (x * 0.5 + 0.5) * 3.0;
+    float cell = min(floor(sn), 2.0);
+    float f = sn - cell;
+    float h1 = fract(sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
+    float h2 = fract(sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
+    float len = 0.7 + 0.3 * h2;
+    if (t > len) return 0.0;
+    float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
+    float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
+    return 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+  }
+
   void main() {
     float t = clamp(vUv.y, 0.0, 1.0);
 
@@ -244,7 +264,10 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Feathered Multi-Filament Tip Cutout:
     // Inner foundation shell (vCardMask < 0.5) stays 100% solid; outer locks stay cohesive
     // across root->mid-body and dissolve cleanly into fine individual hair wisps across the outer 42% tip!
-    if (vCardMask > 0.5 && t > 0.58) {
+    // Strand card (hybrid fine strands, mask 0.75): a few separate hairs along the whole length (strandCardAlpha)
+    if (vCardMask > 0.5 && vCardMask < 0.9) {
+      if (strandCardAlpha(vUv.x, t, vStrandSeed) < 0.36) discard;
+    } else if (vCardMask > 0.5 && t > 0.58) {
       float strandAlpha = texture2D(uAlphaMap, sampleUv).r;
       float edgeDist = min(abs(vUv.x - 0.34), abs(vUv.x - 0.66));
       float lateralFray = smoothstep(0.0, 0.075, edgeDist);

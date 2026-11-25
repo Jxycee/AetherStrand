@@ -42,7 +42,7 @@ namespace AetherStrand
             public int layerOrder = -1;               // <0: derive (base 0, else 2)
             public double restMidR = double.NaN;      // NaN: derive from rest[4]
             public double rootRawY = double.NaN;      // NaN: rest[0].y
-            public bool isBaseShell, lockNormal, isFadeCap;
+            public bool isBaseShell, lockNormal, isFadeCap, strandCard; // strandCard: hybrid fine strands (card mask 0.75)
             public bool rigid;                        // close-cut: keeps its rest shape, follows the head rigidly (no sim, no collision)
             public double fadeStart = double.NaN;     // NaN: default fade curve (alpha 0.25)
             public int smooth = 1;                    // mesh-only Catmull-Rom subdivision 1..4 (solver stays at N nodes)

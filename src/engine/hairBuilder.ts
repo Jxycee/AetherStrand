@@ -24,6 +24,11 @@ export interface LockBuildSpec {
   isFadeCap?: boolean;
   /** 0..1: where along the ribbon a fade cap starts to dissolve (default curve starts at 0.25). */
   fadeStart?: number;
+  /** A few fine hairs rather than a lock (baby hairs, flyaways). Drawn as before unless the hybrid is on, which renders it
+   *  as a strand card: see-through strands along its whole length (card mask 0.75, hairShaders.ts). */
+  isFineStrand?: boolean;
+  /** Set by the hybrid: render as a strand card (the alpha cut runs the whole length, not only the tip). */
+  strandCard?: boolean;
   /** Shared fix 3: mesh-only smoothing. Integer 1..4: Catmull-Rom resamples the 12 solver nodes into (N-2)*smooth+1 rings (default 1 = legacy mesh). */
   smooth?: number;
   /** 0..1: blends ribbon thickness toward its width for a rounder, tube-like cross-section (default 0). */
@@ -3674,7 +3679,7 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       const hp = hairline(th);
       const side = th >= 0 ? 1 : -1;
       const pts = buildSculptedLock({ thetaStart: th, thetaEnd: th + side * (0.03 + rF() * 0.08), phiStart: hp - 0.07, phiEnd: hp + 0.05 + rF() * 0.05, baseLift: 0.008, midArch: 0.01, tipFlickOut: 0.012, sCurveAmp: (rF() - 0.5) * 0.08, napeHug: 1.0 });
-      specs.push({ pointsLocal: pts, width: (0.006 + rF() * 0.004) * wMul, thickness: 0.006, stiffnessBias: 0.7, layerAO: 0.8, layerOrder: 5, lockNormal: false, scalpRoot: 0.3, smooth: 3 });
+      specs.push({ pointsLocal: pts, width: (0.006 + rF() * 0.004) * wMul, thickness: 0.006, stiffnessBias: 0.7, layerAO: 0.8, layerOrder: 5, lockNormal: false, scalpRoot: 0.3, smooth: 3, isFineStrand: true });
     }
 
     // Zone 2: back and side tiers. Three tiers (top short, mid, long under-layer), gaps between clumps.

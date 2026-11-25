@@ -65,6 +65,8 @@ interface VolumetricHairLock {
   isBaseShell: boolean;
   isFadeCap?: boolean;
   fadeStart?: number;
+  /** Hybrid strand card: alpha cut along the whole length (card mask 0.75). */
+  strandCard?: boolean;
   /** Optional mesh-only subdivision (1..4): Catmull-Rom resample of the 12 solver nodes into (N-2)*smooth+1 rings. 1/undefined = legacy mesh. */
   smooth?: number;
   /** Optional 0..1: blends ribbon thickness toward its width (tube-like cross-section). 0/undefined = legacy. */
@@ -2525,6 +2527,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       isBaseShell: Boolean(sp.isBaseShell),
       isFadeCap: Boolean((sp as any).isFadeCap),
       fadeStart: (sp as any).fadeStart,
+      strandCard: (sp as any).strandCard === true || undefined,
       smooth: (sp as any).smooth,
       roundness: (sp as any).roundness,
       tipStart: (sp as any).tipStart,
@@ -3316,11 +3319,19 @@ export class HairPhysicsSystem {
     // hybrid edge cards: thin strand cards split off the outline locks (hairCards.ts), appended last so every other
     // lock keeps its seeded variation
     const cards = this.hybrid?.edgeCards ? edgeCardSpecs(allSpecs, { count: this.hybrid.edgeCards, seed: this.hybrid.seed }) : [];
+    // hybrid fine strands (baby hairs, flyaways): drawn as strand cards, see-through along their whole length, so a few
+    // hairs read as hairs instead of solid slivers when the head turns. Only a mesh flag: no seeded draw or bake changes.
+    if (this.hybrid) for (const s of allSpecs) if (s.isFineStrand) s.strandCard = true;
     this.locks = locksFromSpecs(cards.length ? allSpecs.concat(cards) : allSpecs, config.seed || 1337);
     bakeCollisionFreeRestPose(this.locks);
     // the base shells go only after the build and the rest-pose bake: locksFromSpecs draws per-lock variation from one
     // seeded sequence and the bake pushes locks off each other, so dropping them earlier would move every other lock
     if (this.hybrid?.mass) this.locks = this.locks.filter((l) => !l.isBaseShell);
+    // strand cards follow the head rigidly at their baked shape. A baby hair is 1-2 cm long and its stiffness comes from the
+    // same per-node curve as a 15 cm lock, so in the app's turn motion it swung 103% of its own length (median; ordinary
+    // locks 22-33%), flopping onto the temple as the slivers seen in motion. Short hair barely moves (bending stiffness
+    // grows as 1 / length^3), so rigid is the honest model. Set after the bake so the other locks bake exactly as before.
+    for (const l of this.locks) if (l.strandCard) l.rigid = true;
     this.bakedWidthScale = 1.0;
     this.lastWidthScale = 1.0;
     this.buildCohesionGraph();
@@ -3591,7 +3602,7 @@ export class HairPhysicsSystem {
       const baseVertex = vertBase[s];
       const ringsPerLock = this.lockRingCount[s];
       const lockSm = this.lockSmooth[s];
-      const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : 1.0;
+      const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : lock.strandCard ? 0.75 : 1.0;
       const cr0 = lock.colorRange ? lock.colorRange[0] : 0, cr1 = lock.colorRange ? lock.colorRange[1] : 1;
 
       for (let k = 0; k < ringsPerLock; k++) {

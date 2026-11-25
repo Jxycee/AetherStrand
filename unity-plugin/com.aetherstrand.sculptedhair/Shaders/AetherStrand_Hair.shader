@@ -151,6 +151,27 @@ Shader "AetherStrand/SculptedHair_URP"
             return smoothstep(fadeStart0, 1.0, t);
         }
 
+        // Strand card coverage (hybrid fine strands): a few separate hairs across the lock instead of the dense alpha card.
+  // u runs round the lens profile (hairPhysics PROFILE_U: top centre 0, side 0.34, bottom centre 0.5, side 0.66), so u is first
+  // turned back into the lateral position across the lock, which puts each hair on both faces at the same place. 3 hairs
+  // per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
+  // offset, sway, taper and length from the lock seed.
+        // Mirrors strandCardAlpha in hairShaders.ts.
+        float AetherStrandCardAlpha(float u, float t, float seed)
+        {
+            float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
+                    : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+            float sn = (x * 0.5 + 0.5) * 3.0;
+            float cell = min(floor(sn), 2.0);
+            float f = sn - cell;
+            float h1 = frac(sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
+            float h2 = frac(sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
+            float len = 0.7 + 0.3 * h2;
+            float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
+            float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
+            return t > len ? 0.0 : 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+        }
+
         void AetherApplyTipAlphaClip(float2 uv, float4 vertColor, float2 screenPosXY)
         {
             #ifdef _USE_ALPHA_CLIP
@@ -166,6 +187,17 @@ Shader "AetherStrand/SculptedHair_URP"
                 // ordered IGN broken up by a little white noise so the dither reads as fine stubble grain, not a regular grid
                 float wn = frac(sin(dot(floor(screenPosXY), float2(12.9898, 78.233))) * 43758.5453);
                 clip(coverage - lerp(AetherInterleavedGradientNoise(screenPosXY), wn, 0.45));
+                return;
+            }
+            // Mode 3: strand card (hybrid fine strands, vertColor.a 0.75): a few separate hairs along the whole length
+            if (vertColor.a > 0.5 && vertColor.a < 0.9)
+            {
+                float seedS = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0;
+                float alphaS = AetherStrandCardAlpha(uv.x, t, seedS);
+                float cutoffS = _AlphaClip;
+                if (_DitherStrength > 0.001)
+                    cutoffS = lerp(_AlphaClip, _AlphaClip + (AetherInterleavedGradientNoise(screenPosXY) - 0.5) * 0.45, _DitherStrength);
+                clip(alphaS - cutoffS);
                 return;
             }
             // Mode 2: solid cohesive root->mid body; outer lock tips (vertColor.a > 0.5 && t > 0.70) fray into fine wisps
@@ -668,6 +700,24 @@ Shader "AetherStrand/SculptedHair_URP"
 
         Cull Off
 
+        CGINCLUDE
+        // strand card coverage, same as the URP SubShader (see the comment there)
+        float AetherStrandCardAlpha(float u, float t, float seed)
+        {
+            float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
+                    : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+            float sn = (x * 0.5 + 0.5) * 3.0;
+            float cell = min(floor(sn), 2.0);
+            float f = sn - cell;
+            float h1 = frac(sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
+            float h2 = frac(sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
+            float len = 0.7 + 0.3 * h2;
+            float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
+            float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
+            return t > len ? 0.0 : 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+        }
+        ENDCG
+
         Pass
         {
             Name "BuiltInForwardBase"
@@ -779,7 +829,12 @@ Shader "AetherStrand/SculptedHair_URP"
                 else
                 #endif
                 #ifdef _USE_ALPHA_CLIP
-                if (i.vertColor.a > 0.5 && t > 0.70)
+                if (i.vertColor.a > 0.5 && i.vertColor.a < 0.9)
+                {
+                    // strand card (hybrid fine strands): cut along the whole length
+                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b) - _AlphaClip);
+                }
+                else if (i.vertColor.a > 0.5 && t > 0.70)
                 {
                     float2 strandUv = float2(i.uv.x * 0.65 + i.vertColor.b * 3.13, t);
                     float cardAlpha = tex2D(_AlphaMap, strandUv).r;
@@ -885,7 +940,11 @@ Shader "AetherStrand/SculptedHair_URP"
             {
                 #ifdef _USE_ALPHA_CLIP
                 float t = saturate(i.uv.y);
-                if (i.vertColor.a > 0.5 && t > 0.70)
+                if (i.vertColor.a > 0.5 && i.vertColor.a < 0.9)
+                {
+                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b) - _AlphaClip);
+                }
+                else if (i.vertColor.a > 0.5 && t > 0.70)
                 {
                     float2 strandUv = float2(i.uv.x * 0.65 + i.vertColor.b * 3.13, t);
                     float cardAlpha = tex2D(_AlphaMap, strandUv).r;
