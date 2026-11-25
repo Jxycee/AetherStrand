@@ -24,6 +24,11 @@
 //   grid on the render (bright where it is in front of the hair, faint where the hair covers it, hidden behind the head).
 //   --shell-gaps gaps.json (with --ref): per shell cell, how many mm its hair edge must move out (+) or in (-) to meet the
 //   reference outline, measured on each view's rim (null: no view sees that cell's edge). tools/preview/shell_fit.ts loops it.
+//   --debug silhouette,roots,fade writes <out>_<view>.png per debug view: silhouette (flat white hair, light grey solid paint,
+//   dark head: the outline alone), roots (bare head with every lock root as a dot coloured by layer: grey base shell,
+//   blue nape/under, green sides/back, orange crown/bangs, magenta accents, cyan fade caps; a short line shows the comb
+//   direction), fade (the scalp paint's alpha as a heat map on the bare head: grey none, blue low, green, yellow, red solid;
+//   white contours at 0.25, 0.5 and 0.75).
 //   --no-hair hides the hair. --grid overlays the scalp coordinate grid on the head (blue |azimuth|, red phi, every 0.1 rad, thick lines at 0.5).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -218,6 +223,16 @@ const outline: Record<string, OutlineResult> = {};
 // --shell-overlay: the shell (or, without one, the captured outer surface) drawn as a grid on a copy of the render
 const showShell = args.includes('--shell-overlay');
 const ssheet = showShell ? new Uint8Array(sheet.length) : null;
+// --debug silhouette,roots,fade: flat debug views, one <out>_<view>.png each
+const DEBUG_VIEWS = ['silhouette', 'roots', 'fade'] as const;
+const debugViews = (arg('--debug') ?? '').split(',').filter((x): x is (typeof DEBUG_VIEWS)[number] => (DEBUG_VIEWS as readonly string[]).includes(x));
+if (arg('--debug') && !debugViews.length) throw new Error(`--debug takes ${DEBUG_VIEWS.join(', ')}`);
+const dsheets: Record<string, Uint8Array> = Object.fromEntries(debugViews.map((k) => [k, new Uint8Array(sheet.length)]));
+// lock roots for the roots view: world position of the root, a point two nodes along (the comb direction), layer
+const ROOT_COLS: Record<number, number[]> = { 0: [150, 150, 150], 1: [70, 140, 255], 2: [80, 220, 110], 3: [255, 165, 40], 4: [255, 70, 220] };
+const lockRoots = debugViews.includes('roots')
+  ? (hair.locks as any[]).map((l) => ({ a: l.particles[0].pos as THREE.Vector3, b: l.particles[Math.min(2, l.particles.length - 1)].pos as THREE.Vector3, col: l.isFadeCap ? [0, 230, 230] : ROOT_COLS[l.layerOrder ?? 2] ?? [255, 255, 255] }))
+  : [];
 // --shell-gaps gaps.json (with --ref): how far, in mm, each shell cell's hair edge sits from the reference outline
 const gapsArg = arg('--shell-gaps');
 if (gapsArg && !ref) throw new Error('--shell-gaps needs --ref');
@@ -457,6 +472,8 @@ function renderView(vi: number) {
       return bc * diff * aoK + s1 * spec1 * aoK + s2 * spec2 * aoK + rim * bc * 2;
     });
   }
+  // the head and paint alone, before the hair goes on, for the debug views
+  const bodyZ = debugViews.length ? zbuf.slice() : null, bodyCol = debugViews.length ? col.slice() : null, bodyPaint = debugViews.length ? paintBuf.slice() : null, bodyKind = debugViews.length ? kindBuf.slice() : null;
   curKind = 2;
   for (let i = 0; i < index.length; i += 3) {
     const a0 = index[i], a1 = index[i + 1], a2 = index[i + 2];
@@ -477,6 +494,49 @@ function renderView(vi: number) {
         } else {
           sheet[o + k] = bg[k];
         }
+      }
+    }
+  }
+  // debug views. silhouette: flat hair (white), solid scalp paint (light grey), head (dark grey), so the outline reads
+  // alone. roots: the head and paint with no hair, a dot at every lock root coloured by layer and a short line along its
+  // first nodes (comb direction). fade: the scalp paint's alpha as a heat map on the bare head, contours at 0.25/0.5/0.75.
+  const toS = (c: number) => { c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14); c = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; return Math.max(0, Math.min(255, Math.round(c * 255))); };
+  for (const dv of debugViews) {
+    const ds = dsheets[dv];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x, o = (y * W * views.length + vi * W + x) * 3;
+      let c: number[];
+      if (dv === 'silhouette') {
+        c = kindBuf[i] === 2 ? [245, 245, 245] : kindBuf[i] === 1 && paintBuf[i] >= 0.6 ? [175, 175, 175] : kindBuf[i] ? [70, 72, 78] : [12, 12, 16];
+      } else if (dv === 'roots') {
+        c = bodyZ![i] > -1e8 ? [toS(bodyCol![i * 3]), toS(bodyCol![i * 3 + 1]), toS(bodyCol![i * 3 + 2])] : bg;
+      } else {
+        const a = bodyPaint![i];
+        if (bodyZ![i] <= -1e8) c = bg;
+        else if (a <= 0.01 || bodyKind![i] === 3) c = [120, 116, 112]; // (back faces, e.g. inside the eye holes, show no paint)
+        else {
+          const stops = [[40, 60, 200], [40, 190, 120], [240, 220, 40], [230, 50, 40]];
+          const t = Math.min(0.999, a) * 3, k = Math.floor(t), f = t - k;
+          c = [0, 1, 2].map((q) => stops[k][q] + (stops[k + 1][q] - stops[k][q]) * f);
+        }
+        // contours where the alpha crosses 0.25, 0.5, 0.75
+        if (x > 0 && y > 0 && bodyZ![i] > -1e8 && bodyKind![i] !== 3) for (const lv of [0.25, 0.5, 0.75]) {
+          const ok = (k: number) => bodyZ![k] > -1e8 && bodyKind![k] !== 3; // neighbours on the head's front only
+          const s0 = a >= lv;
+          if ((ok(i - 1) && s0 !== bodyPaint![i - 1] >= lv) || (ok(i - W) && s0 !== bodyPaint![i - W] >= lv)) c = [255, 255, 255];
+        }
+      }
+      ds[o] = c[0]; ds[o + 1] = c[1]; ds[o + 2] = c[2];
+    }
+    if (dv === 'roots') {
+      const put = (x: number, y: number, col: number[]) => { if (x < 0 || y < 0 || x >= W || y >= H) return; const o = (y * W * views.length + vi * W + x) * 3; ds[o] = col[0]; ds[o + 1] = col[1]; ds[o + 2] = col[2]; };
+      for (const lr of lockRoots) {
+        const a = proj(lr.a.x, lr.a.y, lr.a.z), b = proj(lr.b.x, lr.b.y, lr.b.z);
+        const ix = Math.round(a[0]), iy = Math.round(a[1]);
+        if (ix < 0 || iy < 0 || ix >= W || iy >= H || a[2] < bodyZ![iy * W + ix] - 0.006) continue; // root behind the head
+        const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
+        for (let t = 0; t <= n; t++) put(Math.round(a[0] + ((b[0] - a[0]) * t) / n), Math.round(a[1] + ((b[1] - a[1]) * t) / n), lr.col.map((v) => v * 0.7));
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) put(ix + dx, iy + dy, lr.col);
       }
     }
   }
@@ -594,6 +654,8 @@ if (gapsArg && overlayGrid) {
 }
 const shellPath = outPath.replace(/\.png$/i, '') + '_shell.png';
 if (ssheet) writePng(shellPath, ssheet);
+const debugPaths: Record<string, string> = {};
+for (const dv of debugViews) { debugPaths[dv] = outPath.replace(/\.png$/i, '') + `_${dv}.png`; writePng(debugPaths[dv], dsheets[dv]); }
 const ov = Object.values(outline);
 
 const pick = (k: string) => (typeof audit[k] === 'number' ? Number(audit[k].toFixed(2)) : audit[k]);
@@ -604,4 +666,5 @@ console.log(JSON.stringify({
   crownHookCount: pick('crownHookCount'), interLockClipPct: pick('interLockClipPct'), score: pick('score'), verdict: audit.verdict,
   ...(osheet ? { outline, outlineScore: ov.length ? Math.round((100 * ov.reduce((a, o) => a + o.iou, 0)) / ov.length) : null, outlineImage: outlinePath } : {}),
   ...(ssheet ? { shellImage: shellPath } : {}),
+  ...(debugViews.length ? { debugImages: debugPaths } : {}),
 }));

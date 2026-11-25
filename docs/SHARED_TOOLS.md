@@ -342,6 +342,24 @@ thinner. The green grid in the viewport follows the drag; the hair rebuilds when
 | `--shell-capture grid.json` | Write the hair's current outer heights as an editable shell grid. |
 | `--shell-overlay` | Write `<out>_shell.png`: the shell as a green grid on the render. |
 | `--shell-gaps gaps.json` | With `--ref`: per shell cell, how far its hair edge sits from the reference outline (mm). |
+| `--debug silhouette,roots,fade` | Debug views, one `<out>_<view>.png` each. See below. |
+
+### Debug views (`--debug`)
+
+Three flat views that each answer one question a shaded render hides. Example: docs/previews/debug-views-undercut-v13.png.
+
+- `silhouette`: is the outline right? Lock hair white, scalp paint at alpha 0.6 or more light grey, head dark grey,
+  background black. Shows which parts of the outline are locks and which are paint (on the undercut v13 the whole back
+  below the crown is paint, not hair).
+- `roots`: where does each lock grow from, and which way is it combed? The bare head with its paint, a dot at every lock
+  root coloured by layer (grey base shell, blue nape/under, green sides/back, orange crown/bangs, magenta accents, cyan
+  fade caps) and a short line along the lock's first nodes. Roots behind the head are hidden. Use it to find bald gaps
+  between root rows, roots on the skin past the hairline, and locks combed the wrong way.
+- `fade`: what does the scalp paint do? Its alpha (with grain) as a heat map on the bare head: grey none, then blue, green,
+  yellow and red for solid, with white contours at 0.25, 0.5 and 0.75. A fade that "reads as nearly invisible" shows here
+  as a narrow band of blue and green under a big solid red area (as on the undercut v13).
+
+The web app already has a silhouette view mode (Scene > vision); roots and fade are preview-only for now.
 
 ### Outline score (`--ref`)
 
