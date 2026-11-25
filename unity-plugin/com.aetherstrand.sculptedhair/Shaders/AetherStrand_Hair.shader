@@ -10,6 +10,7 @@ Shader "AetherStrand/SculptedHair_URP"
         _StrandFlowMap ("Baked Strand Direction (RG = across, along)", 2D) = "gray" {}
         [Toggle(_USE_ALPHA_CLIP)] _UseAlphaClip ("Enable Feathered Wispy-Tip Clipping", Float) = 1
         _AlphaClip ("Alpha Cutoff", Range(0.05, 0.85)) = 0.36
+        [Toggle(_ALPHA_TO_COVERAGE)] _AlphaToMask ("Alpha To Coverage (needs MSAA; smooth tips without TAA)", Float) = 0
         [Header(Web Light Rig Parity)]
         _UseWebRig ("Use fixed web 3-light rig (parity)", Float) = 0
         _ParityDisplay ("Apply web display transform in shader (ACES exposure 1.16 + sRGB) for A/B tests", Float) = 0
@@ -172,9 +173,12 @@ Shader "AetherStrand/SculptedHair_URP"
             return t > len ? 0.0 : 1.0 - smoothstep(w * 0.6, w, abs(f - c));
         }
 
-        void AetherApplyTipAlphaClip(float2 uv, float4 vertColor, float2 screenPosXY)
+        // Signed alpha margin of the tip, strand-card and fade-cap cut-outs: coverage minus cutoff (< 0 = cut away), 1 where
+        // nothing is cut. soft = the edge comes from a coverage value (wispy tips, strand cards), so alpha to coverage can
+        // smooth it; fade caps are a screen-space dither and are always clipped.
+        float AetherTipMargin(float2 uv, float4 vertColor, float2 screenPosXY, out bool soft)
         {
-            #ifdef _USE_ALPHA_CLIP
+            soft = false;
             float t = saturate(uv.y);
             // Mode 1: isFadeCap (vertColor.a == 0.25): dithered-opaque fade. Stays mostly opaque (_FadeOpacity) over the
             // body of the fade and only the last _FadeSoftness of it breaks up (fine interleaved-gradient dither) toward the hairline.
@@ -186,23 +190,23 @@ Shader "AetherStrand/SculptedHair_URP"
                 float coverage = lerp(1.0, _FadeOpacity * (1.0 - 0.45 * u), smoothstep(0.0, 0.2, u)) * (1.0 - tail);
                 // ordered IGN broken up by a little white noise so the dither reads as fine stubble grain, not a regular grid
                 float wn = frac(sin(dot(floor(screenPosXY), float2(12.9898, 78.233))) * 43758.5453);
-                clip(coverage - lerp(AetherInterleavedGradientNoise(screenPosXY), wn, 0.45));
-                return;
+                return coverage - lerp(AetherInterleavedGradientNoise(screenPosXY), wn, 0.45);
             }
             // Mode 3: strand card (hybrid fine strands, vertColor.a 0.75): a few separate hairs along the whole length
             if (vertColor.a > 0.5 && vertColor.a < 0.9)
             {
+                soft = true;
                 float seedS = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0;
                 float alphaS = AetherStrandCardAlpha(uv.x, t, seedS);
                 float cutoffS = _AlphaClip;
                 if (_DitherStrength > 0.001)
                     cutoffS = lerp(_AlphaClip, _AlphaClip + (AetherInterleavedGradientNoise(screenPosXY) - 0.5) * 0.45, _DitherStrength);
-                clip(alphaS - cutoffS);
-                return;
+                return alphaS - cutoffS;
             }
             // Mode 2: solid cohesive root->mid body; outer lock tips (vertColor.a > 0.5 && t > 0.70) fray into fine wisps
             if (vertColor.a > 0.5 && t > 0.58)
             {
+                soft = true;
                 float seedD = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0; // seed packed over two 8-bit channels
                 float2 strandUv = float2(uv.x * 0.92 + seedD * 3.13, t);
                 float cardAlpha = SAMPLE_TEXTURE2D(_AlphaMap, sampler_AlphaMap, strandUv).r;
@@ -216,8 +220,38 @@ Shader "AetherStrand/SculptedHair_URP"
                     float ign = AetherInterleavedGradientNoise(screenPosXY);
                     cutoff = lerp(_AlphaClip, _AlphaClip + (ign - 0.5) * 0.45, _DitherStrength);
                 }
-                clip(combinedAlpha - cutoff);
+                return combinedAlpha - cutoff;
             }
+            return 1.0;
+        }
+
+        void AetherApplyTipAlphaClip(float2 uv, float4 vertColor, float2 screenPosXY)
+        {
+            #ifdef _USE_ALPHA_CLIP
+            bool soft;
+            clip(AetherTipMargin(uv, vertColor, screenPosXY, soft));
+            #endif
+        }
+
+        // Forward pass alpha. With _ALPHA_TO_COVERAGE (MSAA on, AlphaToMask on) the soft edges are not clipped but turned
+        // into a sharpened coverage (margin over its screen-space rate, about one pixel wide), so MSAA resolves them into
+        // smooth fine tips without temporal accumulation; fade-cap dither is still clipped. Otherwise: clip, alpha 1.
+        float AetherForwardAlpha(float2 uv, float4 vertColor, float2 screenPosXY)
+        {
+            #ifdef _USE_ALPHA_CLIP
+            bool soft;
+            float m = AetherTipMargin(uv, vertColor, screenPosXY, soft);
+            #ifdef _ALPHA_TO_COVERAGE
+            float a = saturate(m / max(fwidth(m), 0.0001) + 0.5);
+            if (!soft) { clip(m); a = 1.0; }
+            clip(a - 0.001);
+            return a;
+            #else
+            clip(m);
+            return 1.0;
+            #endif
+            #else
+            return 1.0;
             #endif
         }
 
@@ -239,6 +273,7 @@ Shader "AetherStrand/SculptedHair_URP"
             Tags { "LightMode" = "UniversalForward" }
 
             Cull Off
+            AlphaToMask [_AlphaToMask]
 
             HLSLPROGRAM
             #pragma target 4.5
@@ -246,6 +281,7 @@ Shader "AetherStrand/SculptedHair_URP"
             #pragma fragment Frag
 
             #pragma shader_feature_local _USE_ALPHA_CLIP
+            #pragma shader_feature_local_fragment _ALPHA_TO_COVERAGE
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
@@ -332,7 +368,7 @@ Shader "AetherStrand/SculptedHair_URP"
             half4 Frag(Varyings input, bool isFrontFace : SV_IsFrontFace) : SV_Target
             {
                 // ---- Exact port of the AetherStrand web (three.js) hair fragment shader ----
-                AetherApplyTipAlphaClip(input.uv, input.vertColor, input.positionCS.xy);
+                float outAlpha = AetherForwardAlpha(input.uv, input.vertColor, input.positionCS.xy);
 
                 float t = saturate(input.uv.y);
                 float seed = (floor(input.vertColor.b * 255.0 + 0.5) + input.vertColor.r) / 255.0;
@@ -517,7 +553,7 @@ Shader "AetherStrand/SculptedHair_URP"
                     finalColor = MixFog(finalColor, input.fogFactor);
                 }
                 if (_ParityDisplay > 0.5) finalColor = AS_WebDisplay(finalColor, 1.16);
-                return half4(finalColor, 1.0);
+                return half4(finalColor, outAlpha);
             }
             ENDHLSL
         }

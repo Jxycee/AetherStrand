@@ -1,5 +1,5 @@
 // Scratch harness: attach web hair to Tobin (TobinBase.fbx) with the plugin's head fit and render 4 views with the web studio rig.
-// Env: SC_TOBIN_RECIPE, SC_TOBIN_GEO, SC_TOBIN_TAG, SC_TOBIN_FIT (1 = autoFit, 0 = raw web scale), SC_PARITY_OUT, SC_PARITY_RIG
+// Env: SC_TOBIN_RECIPE, SC_TOBIN_GEO, SC_TOBIN_TAG, SC_TOBIN_FIT (1 = autoFit, 0 = raw web scale), SC_TOBIN_PAINT (1 = build the scalp paint, default), SC_PARITY_OUT, SC_PARITY_RIG
 using System;
 using System.IO;
 using System.Reflection;
@@ -61,6 +61,14 @@ public static class TobinFitTest
         var smr = (SkinnedMeshRenderer)genT.GetMethod("GenerateAndAttach", BindingFlags.Public | BindingFlags.Static)
             .Invoke(null, new object[] { tobin, p, geo, "Assets/Parity/Hair_" + tag + ".asset", matA });
         if (smr == null) throw new Exception("GenerateAndAttach null");
+        // AET-15: build the painted short hair and fade under the locks, as the importer does (AetherStrandWebImport.Apply);
+        // without it short and faded sides showed bare scalp. SC_TOBIN_PAINT=0 skips it.
+        if (ParityRender.Env("SC_TOBIN_PAINT", "1") == "1")
+        {
+            var spT = Type.GetType("AetherStrand.Editor.AetherStrandScalpPaint, AetherStrand.Editor");
+            var paintR = spT.GetMethod("Build", BindingFlags.Public | BindingFlags.Static).Invoke(null, new object[] { tobin, geo, matA, "Assets/Parity", tag });
+            Debug.Log("TOBIN scalp paint " + (paintR != null ? "built" : "none in this export"));
+        }
         { var evr = HairEval.Evaluate(tobin, head, smr.sharedMesh); var evs = tag + " " + evr; Debug.Log("HAIREVALRESULT " + evs); File.AppendAllText(outDir + "/eval_k3.txt", evs + "\n"); }
         Debug.Log("TOBIN hair bounds(world) " + smr.bounds.center + " size " + smr.bounds.size);
 
