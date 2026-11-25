@@ -359,7 +359,7 @@ Three flat views that each answer one question a shaded render hides. Example: d
   yellow and red for solid, with white contours at 0.25, 0.5 and 0.75. A fade that "reads as nearly invisible" shows here
   as a narrow band of blue and green under a big solid red area (as on the undercut v13).
 
-The web app already has a silhouette view mode (Scene > vision); roots and fade are preview-only for now.
+The web app already has a silhouette vision mode; roots and fade are preview-only for now.
 
 ### Outline score (`--ref`)
 
