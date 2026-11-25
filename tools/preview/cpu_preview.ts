@@ -332,7 +332,8 @@ function renderView(vi: number) {
     // card normal made every card seen edge-on or from below a near-black leaf the app never shows
     const diff = 0.34 + 0.58 * Math.max(0, (BN.dot(key) + 0.25) / 1.25) + 0.16 * Math.max(0, BN.dot(fill));
     const keyFacing = sstepK(-0.14, 0.48, BN.dot(key));
-    const specMask = sstepK(0.08, 0.24, t) * (0.62 + 0.38 * ao[i]);
+    // (as hairShaders.ts: a light-rooted lock (scalpRoot < 0.5) keeps its highlight to the root)
+    const specMask = (1 + (sstepK(0.08, 0.24, t) - 1) * sstepK(0, 0.5, scalpRootA[i])) * (0.62 + 0.38 * ao[i]);
     const lobe = (shift: number, pw: number) => { const th = T.clone().addScaledVector(BN, shift).normalize().dot(Hh); return Math.pow(Math.sqrt(Math.max(0, 1 - th * th)), pw); };
     const spec1 = (lobe(0.05, pPow) * pInt * 0.56 * 1.6 + lobe(0.02, 14) * 0.3 * 0.35) * keyFacing * specMask;
     const spec2 = lobe(0.25, sPow) * sInt * 0.44 * keyFacing * specMask;

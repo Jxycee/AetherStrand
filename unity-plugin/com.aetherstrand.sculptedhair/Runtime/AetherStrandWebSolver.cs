@@ -54,6 +54,7 @@ namespace AetherStrand
             public double surfaceShine = 0;           // 0..1 shading tangent flattened onto the scalp, so close-cut locks shine in bands
             public double rootWidth = double.NaN;     // 0.05..1 root end width as a fraction of the lock's width (NaN: by scalpRoot)
             public double[] rootNormal = { 0, 1, 0 }; // web head-local
+            public double[] shadeDir = null;          // web head-local direction the highlight follows with surfaceShine (null: root to tip)
         }
 
         // ---------------- constants (hairPhysics.ts) ----------------

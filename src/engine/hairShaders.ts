@@ -392,7 +392,9 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
     float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
-    float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
+    // (no highlight on a root at the skin; a lock with a light root (scalpRoot < 0.5) lies on other hair and keeps its
+    // highlight to the root, so a root left uncovered at a crop's edge isn't a dark dash)
+    float specMask = mix(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, vScalpRoot)) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
     float keyFacing = smoothstep(-0.14, 0.48, dot(baseN, LKey));
     float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 

@@ -194,6 +194,24 @@ namespace AetherStrand
                 double odInv = 1.0 / (odl == 0 ? 1.0 : odl);
                 odx *= odInv; ody *= odInv; odz *= odInv;
                 double ox = 0, oy = 1, oz = 0;
+                // the lock's overall direction (root to tip): with surfaceShine the shading tangent leans to it, so a lock that
+                // bends keeps one highlight along its length instead of going dark where it bends away from the light (as the web)
+                double chx = 0, chy = 0, chz = 0;
+                if (lk.surfaceShine > 0 && lk.shadeDir != null)
+                {
+                    // (a shadeDir from the builder: the comb direction there, shared by neighbouring locks)
+                    double[] sd = lk.shadeDir;
+                    chx = m00 * sd[0] + m01 * sd[1] + m02 * sd[2]; chy = m10 * sd[0] + m11 * sd[1] + m12 * sd[2]; chz = m20 * sd[0] + m21 * sd[1] + m22 * sd[2];
+                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
+                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+                }
+                else if (lk.surfaceShine > 0)
+                {
+                    int tl0 = b + AetherStrandWebSolver.N - 1;
+                    chx = X[tl0] - X[b]; chy = Y[tl0] - Y[b]; chz = Z[tl0] - Z[b];
+                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
+                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+                }
                 int sm = lockSm[s], rings = ringCount[s];
                 double round = lk.roundness;
                 if (sm > 1)
@@ -242,7 +260,8 @@ namespace AetherStrand
                     double stx = tx, sty = ty, stz = tz;
                     if (lk.surfaceShine > 0)
                     {
-                        double tn = (tx * hnx + ty * hny + tz * hnz) * lk.surfaceShine;
+                        if (chx != 0 || chy != 0 || chz != 0) { stx += (chx - stx) * lk.surfaceShine; sty += (chy - sty) * lk.surfaceShine; stz += (chz - stz) * lk.surfaceShine; }
+                        double tn = (stx * hnx + sty * hny + stz * hnz) * lk.surfaceShine;
                         stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
                         double sl = System.Math.Sqrt(stx * stx + sty * sty + stz * stz);
                         if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
@@ -304,6 +323,7 @@ namespace AetherStrand
                     double thx = X[ti] - hcx, thy = Y[ti] - hcy, thz = Z[ti] - hcz;
                     double thl = System.Math.Sqrt(thx * thx + thy * thy + thz * thz);
                     if (thl > 0) { thx /= thl; thy /= thl; thz /= thl; }
+                    if (chx != 0 || chy != 0 || chz != 0) { ttx += (chx - ttx) * lk.surfaceShine; tty += (chy - tty) * lk.surfaceShine; ttz += (chz - ttz) * lk.surfaceShine; }
                     double tn = (ttx * thx + tty * thy + ttz * thz) * lk.surfaceShine;
                     double fx = ttx - thx * tn, fy = tty - thy * tn, fz = ttz - thz * tn;
                     double fl = System.Math.Sqrt(fx * fx + fy * fy + fz * fz);

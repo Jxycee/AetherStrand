@@ -53,6 +53,12 @@ export interface LockBuildSpec {
    */
   surfaceShine?: number;
   /**
+   * Head-local direction the highlight follows (with surfaceShine): the shading tangent leans to it by surfaceShine.
+   * Give neighbouring locks the comb direction at their roots, so they shine together even where each lock bends or
+   * gathers onto a clump on its own. Unset: the lock's own root-to-tip direction. Only the highlight changes.
+   */
+  shadeDir?: THREE.Vector3;
+  /**
    * 0.05..1: width of the root end as a fraction of the lock's width (default by scalpRoot: 0.36, or 0.08 below 0.5). The
    * root widens to full over the first quarter of the lock, so a narrow root is a rounded or pointed end; seen face on
    * at a hairline, a row of those reads as hanging bangs. Near 1 the lock is full width from the root, and with the root
@@ -613,6 +619,10 @@ export interface CropFieldOptions {
   clumpSpacing?: number;
   /** 0..1: how strongly lock tips gather onto their clump guide. 0 = an even comb, 1 = tight pointed clumps. Default 0.55. */
   clump?: number;
+  /** Crown-and-back taper (0..1): away from the front hairline, locks shorten toward the side/back edge, the hair surface
+   *  lowers onto the scalp there and the locks take the root end of the colour gradient, so the top blends into a fade
+   *  with no overhanging shelf. Also turns off the smooth-back lengthening (backSmooth) in proportion. Default 0. */
+  backTaper?: number;
   /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
   colorRange?: [number, number];
   seed?: number;
@@ -707,6 +717,10 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   // fade edge: 1 at the side/back edge, 0 from fadeEdge inside it (none along the front hairline)
   const fadeW = o.fadeEdge ?? 0.3;
   const sideEdge = (u: THREE.Vector3) => (fadeW > 0 ? (1 - frontAzK(azOf(u))) * (1 - _ss(insideHair(u) / fadeW)) : 0);
+  // backTaper: from behind the temples round the back, the crop tapers short toward the edge (1 on the edge, 0 from about
+  // 13 cm inside it), so the top blends down into the fade instead of hanging over it as a long shelf
+  // (not over the temples: there the head bulges past the scalp ellipsoid and lowered locks dip into it)
+  const taperAt = (u: THREE.Vector3) => (o.backTaper ?? 0) * _ss((Math.abs(azOf(u)) - 1.2) / 0.6) * (1 - _ss(insideHair(u) / 0.45));
   const hairSurface = (u: THREE.Vector3) => {
     const room = _ss((insideHair(u) + 0.05) / 0.45);
     const side = 1 - sideTaper * _ss((phiOf(u) - (o.sideTaperFrom ?? 0.85)) / 0.45);
@@ -715,7 +729,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
     // the centre front stands higher than the temples (fades out across the top)
     const ih = insideHair(u);
     const arch = (o.centreArch ?? 0) * (1 - _ss(Math.abs(azOf(u)) / 0.7)) * _ss((ih + 0.05) / 0.15) * (1 - _ss((ih - 0.25) / 0.5));
-    return Math.max(0.002, V0 * (0.3 + 0.7 * room) * side * (1 - 0.9 * sideEdge(u)) + nz + arch);
+    return Math.max(0.002, V0 * (0.3 + 0.7 * room) * side * (1 - 0.9 * sideEdge(u)) * (1 - 0.7 * taperAt(u)) + nz + arch);
   };
   // the quiff's rise (m), straight up and a little back rather than out of the forehead (out reads as a visor)
   const quiffUp = new THREE.Vector3(0, 1, -(o.quiffBack ?? 0.25)).normalize();
@@ -726,6 +740,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
     // (from zero at the hairline: a floor there made the front row jump off the scalp as a shelf)
     return V0 * (o.quiff ?? 3) * stand * frontAzK(azOf(u)) * _ss(ih / 0.22) * (1 - _ss((ih - 0.15) / 0.55));
   };
+  const taperRange = (r: [number, number], k: number): [number, number] => [THREE.MathUtils.lerp(r[0], 0.02, k), THREE.MathUtils.lerp(r[1], 0.18, k)];
   const lim = (az: number) => o.hairPhi(az) + overlap + 0.03 + (rnd() - 0.5) * 0.04;
   // march a centre line over the scalp along the flow; it stops at the edge, so nothing runs down into the fade
   const march = (u: THREE.Vector3, len: number, fk: number): THREE.Vector3[] => {
@@ -804,7 +819,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       // shaded like the outer one, so the back reads as one combed surface rather than shingles with dark gaps
       const backK = _ss((Math.abs(az0) - smoothFrom) / 0.8) * (o.backSmooth ?? 1);
       const tuftLock = outer && !!g && g.tuft;
-      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK) * (tuftLock ? 0.5 + 0.15 * rnd() : 1)
+      // (a tapered back is short hair: no smooth-back lengthening there, and shorter locks toward the edge)
+      const bt = taperAt(u);
+      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) * (1 - 0.6 * bt) * (tuftLock ? 0.5 + 0.15 * rnd() : 1)
         * (1 + ((o.sideLength ?? 1) - 1) * _ss((Math.abs(az0) - 0.95) / 0.35) * (1 - _ss((Math.abs(az0) - 2.0) / 0.4)));
       const path = march(u, len, fk);
       if (path.length < 3) return;
@@ -832,7 +849,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         // at the front hairline the climb is slower, so the lock leans back as it rises (a ramp, not a wall facing the
         // camera) and its root starts on the skin, with no dark gap under it
         const rise = _ss(t / (0.25 + 0.3 * edgeK));
-        const h = 0.0025 - 0.016 * edgeK * (1 - _ss(t / 0.2)) + (hairSurface(cu) * layerMul + order) * rise + sp * (o.spikeHeight ?? 0.02) * (tuftLock ? g!.lift * Math.pow(t, 1.6) : Math.pow(t, 3));
+        const h = 0.0032 - 0.016 * edgeK * (1 - _ss(t / 0.2)) + (hairSurface(cu) * layerMul + order) * rise + sp * (o.spikeHeight ?? 0.02) * (tuftLock ? g!.lift * Math.pow(t, 1.6) : Math.pow(t, 3));
         const qh = quiffAt(cu) * layerMul * rise;
         const base = surf(cu, 0);
         const nrm = surf(cu, 1).sub(base).normalize();
@@ -841,10 +858,10 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       specs.push({
         pointsLocal: pts,
         // front hairline locks are seen face on as they rise: a little wider so the front reads full, not as a comb
-        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
+        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6 + 0.4 * bt)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
         // the under layer is darker, except at the front hairline where it is seen face on beside the outer locks
         // (toward the fade the layers lie flat on the paint: no under-layer shadow, so the edge isn't a dark rim)
-        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se), layerOrder: outer ? 3 : 2, smooth: 2,
+        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.55 * bt), layerOrder: outer ? 3 : 2, smooth: 2,
         // (in the turn from combed back to combed down above the ear, tips taper sooner and melt into the layer below
         // instead of ending as hard wedges)
         tipStart: (outer ? 0.5 : 0.6) + 0.15 * backK - (o.turnTaper ?? 0) * _ss((Math.abs(az0) - 0.9) / 0.4) * (1 - _ss((Math.abs(az0) - 2.2) / 0.4)), lockNormal: false,
@@ -856,13 +873,17 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         // (the root shading follows scalpRoot: outer locks lie on other hair, not on the skin, so their roots stay light.
         // A dark root band under each row of tips read as dark wedges on the side of the top; the width keeps the
         // usual 36% root)
-        scalpRoot: edgeK > 0.4 ? 0.9 : outer ? 0.2 : 0.55 - 0.3 * (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4), rootWidth: edgeK > 0.4 ? 0.95 : 0.36,
+        scalpRoot: edgeK > 0.4 ? 0.3 : outer ? 0.2 : 0.55 - 0.3 * (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4), rootWidth: edgeK > 0.4 ? 0.95 : 0.36,
         // a crop is too short to move, and densely layered: kept exactly as built
         rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        // the highlight follows the comb direction at this root (its march along the flow, before the tip gathers onto the
+        // clump guide), shared by its neighbours: they shine together instead of each lock catching the light on its own
+        shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
         // each lock is a piece of longer hair: no light tip on every lock (that dots the surface)
         // (the under layer a little darker for depth between clumps, but no dark roots: seen through gaps in the outer layer,
         // dark roots read as holes)
-        colorRange: o.colorRange ?? (tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55]),
+        // (toward a tapered edge the locks move to the root end of the gradient, the colour of the painted short hair below)
+        colorRange: o.colorRange ?? taperRange(tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55], bt),
       });
     };
     roots(spacing, layer * 1.3, grow);
@@ -907,7 +928,10 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         width: Math.min((o.clumpSpacing ?? 0.055) * cardW, realLen * 0.45) * (0.85 + 0.3 * rnd()) * wMul * (1 - 0.4 * se),
         thickness: 0.0025, stiffnessBias: 0.97, layerAO: 0.9 + 0.1 * rnd(), layerOrder: 4, smooth: 2,
         // pointed: the taper starts early so each clump narrows to one tip
-        tipStart: 0.45, lockNormal: false, scalpRoot: 0.55, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        // (a card lies on the locks, not on the skin: a light root like the outer locks'. With the usual dark root every
+        // card's first fifth read as a dark leaf on the side of the top)
+        tipStart: 0.45, lockNormal: false, scalpRoot: 0.2, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
         colorRange: o.colorRange ?? [0.3, 0.75],
       });
     }
@@ -1018,7 +1042,7 @@ export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx
 /** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
 export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
   return {
-    hairlinePhi: roundedHairline(1.02, 0.12, 0.8), templeRecede: 0.06, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.3,
+    hairlinePhi: roundedHairline(1.1, 0.02, 0.8), templeRecede: 0, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.5,
     earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.4, config.backLength), napeCurve: 0.8,
   };
 }
@@ -1043,7 +1067,7 @@ export function undercutFadePaint(config: HairBuilderConfig): ScalpPaint {
 export function undercutFadeBasePaint(config: HairBuilderConfig): ScalpPaint {
   // thin tapered sideburn (mostly faded), wide soft blend from the top length into the short sides
   // (shaded under the hair, so the side locks lie on darker short hair instead of ending as dark leaves on a lit band)
-  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.16, grain: 0.2, sideburnSolid: 0.25, frontBlend: 0, blend: config.fadeBlend ?? 0.75 }), underShade: 0.5 };
+  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75 }), underShade: 0.5 };
 }
 SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => undercutFadePaint(config);
 
@@ -2644,13 +2668,15 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
 
     // Zone 3: the top as one combed field (shared cropFieldLocks): clumps out from the crown whorl, the front hairline
     // rising up and back, everything getting shorter and flatter down to where the painted fade takes over
-    const undercutPaint = undercutFadeBasePaint(config);
+    // (the top's locks end at the line a 0.6 fade would give whatever fadeHeight is: a lower fadeHeight fills the sides with
+    // solid painted short hair up to meet the top, the head reads full from the front, and the top keeps no long overhang)
+    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6) });
     cropFieldLocks(specs, {
       seed: seedU + 33, wMul, sweep: sweepSign * 0.9,
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 1, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,

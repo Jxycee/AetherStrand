@@ -80,6 +80,8 @@ interface VolumetricHairLock {
   rigid?: boolean;
   /** Optional 0..1: shading tangent flattened onto the scalp, so close-cut locks shine in bands (LockBuildSpec.surfaceShine). */
   surfaceShine?: number;
+  /** Optional head-local unit direction the highlight follows with surfaceShine (LockBuildSpec.shadeDir). */
+  shadeDir?: THREE.Vector3;
   /** Optional 0..1: width of the root end as a fraction of the lock's width (LockBuildSpec.rootWidth). */
   rootWidth?: number;
   lockNormal: boolean;
@@ -2525,6 +2527,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       colorRange: (sp as any).colorRange,
       rigid: (sp as any).rigid === true || undefined,
       surfaceShine: (sp as any).surfaceShine > 0 ? Math.min(1, (sp as any).surfaceShine) : undefined,
+      shadeDir: (sp as any).shadeDir ? (sp as any).shadeDir.clone().normalize() : undefined,
       rootWidth: (sp as any).rootWidth !== undefined ? Math.max(0.05, Math.min(1, (sp as any).rootWidth)) : undefined,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
@@ -5255,6 +5258,20 @@ export class HairPhysicsSystem {
       const baseHalfW = lock.baseWidth * 0.5 * effWidthScale;
       const baseHalfT = lock.baseThickness * 0.5 * effThickScale;
       const shine = lock.surfaceShine ?? 0;
+      // the lock's overall direction (root to tip): with surfaceShine the shading tangent leans to it, so a lock that bends
+      // (a side lock turning from back to down, a tip lifting off the surface) keeps one highlight along its length
+      // instead of going dark where it bends away from the light
+      let chx = 0, chy = 0, chz = 0;
+      if (shine > 0 && lock.shadeDir) {
+        // (a shadeDir from the builder: the comb direction there, shared by neighbouring locks, so they shine together)
+        const sd = lock.shadeDir;
+        chx = m00 * sd.x + m01 * sd.y + m02 * sd.z; chy = m10 * sd.x + m11 * sd.y + m12 * sd.z; chz = m20 * sd.x + m21 * sd.y + m22 * sd.z;
+      } else if (shine > 0) {
+        const p0 = particles[0].pos, p1 = particles[particles.length - 1].pos;
+        chx = p1.x - p0.x; chy = p1.y - p0.y; chz = p1.z - p0.z;
+        const cl = Math.sqrt(chx * chx + chy * chy + chz * chz);
+        if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+      }
 
       const rn = lock.rootNormalLocal;
       let odx = m00 * rn.x + m01 * rn.y + m02 * rn.z;
@@ -5311,7 +5328,8 @@ export class HairPhysicsSystem {
         // close-cut locks shine together in bands instead of each catching the light at its own bend
         let stx = tx, sty = ty, stz = tz;
         if (shine > 0) {
-          const tn = (tx * hnx + ty * hny + tz * hnz) * shine;
+          if (chx !== 0 || chy !== 0 || chz !== 0) { stx += (chx - stx) * shine; sty += (chy - sty) * shine; stz += (chz - stz) * shine; }
+          const tn = (stx * hnx + sty * hny + stz * hnz) * shine;
           stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
           const sl = Math.sqrt(stx * stx + sty * sty + stz * stz);
           if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
@@ -5438,6 +5456,7 @@ export class HairPhysicsSystem {
       headNormals[tipO + 2] = thnz;
 
       if (shine > 0) {
+        if (chx !== 0 || chy !== 0 || chz !== 0) { ttx += (chx - ttx) * shine; tty += (chy - tty) * shine; ttz += (chz - ttz) * shine; }
         const tn = (ttx * thnx + tty * thny + ttz * thnz) * shine;
         const fx = ttx - thnx * tn, fy = tty - thny * tn, fz = ttz - thnz * tn;
         const fl = Math.sqrt(fx * fx + fy * fy + fz * fz);

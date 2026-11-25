@@ -168,6 +168,26 @@ shows as dark teeth along the hairline.
     close to the head, so the front view has no helmet bulge past the temples (undercut: 0.6).
   - `sideLength` (default 1): length multiplier for locks on the side of the top (|azimuth| 0.95 to 2.0). Longer (1.4)
     leaves fewer rows of tips above the ear; shorter (0.6) made more rows of dark tips (undercut: 1.4).
+  - `backTaper` (0..1, default 0): from behind the temples round the back (|azimuth| 1.2 to 1.8 and on), the crop
+    tapers short toward the edge, over the last 0.45 rad inside it. Locks there are up to 60% shorter (and wider, so the
+    shorter locks leave no gaps), the hair surface lowers onto the scalp by up to 70%, the layer AO darkens by up to 55%
+    and the colour moves to the root end of the gradient, the colour of the painted short hair below. It also turns off
+    the smooth-back lengthening (`backSmooth`) in proportion. The top then blends down into the fade with no long
+    overhanging shelf and no ledge where the locks end. Not over the temples: the head bulges past the scalp ellipsoid
+    there and lowered locks dip into it (undercut: 1).
+  - Undercut: the top's locks end where a 0.6 fade would put the hair edge, whatever the recipe's `fadeHeight`. A lower
+    `fadeHeight` (0.3) then only fills the sides with solid painted short hair up to the top, so the head reads full from
+    the front, and the top keeps no long overhang at the back. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
+    painted side crisp, and the hairline is `roundedHairline(1.1, 0.02, 0.8)` with no temple recession, so the forehead
+    isn't tall and the temples aren't shaved up to the top.
+  - Every crop lock starts 3.2 mm off the scalp ellipsoid (was 2.5 mm), so nodes that cross the temple bulge on a
+    character skull clear it after the conform.
+  - Front hairline locks (`edgeK` > 0.4) have `scalpRoot` 0.3: their roots are about the colour of the painted strip they
+    grow out of. A dark root made each of them a dark tooth along the forehead.
+  - Clump cards have `scalpRoot` 0.2, like the outer locks they lie on. With the usual dark root the first fifth of every
+    card read as a dark leaf on the side of the top.
+  - Each crop lock and card sets `shadeDir`, the comb direction at its root (its march along the flow, before the tip
+    gathers onto the clump guide). See Lock options below.
   - Tuft locks are 1.5 times wider (up to 0.9 of their length) and show the colour gradient out to the tip colour
     (`colorRange` [0.3, 1]), so tufts read as lit, chunky clumps over the darker base cap.
   - Outer-layer locks have `scalpRoot` 0.2 (they lie on other hair, not skin), so their roots keep a light shade; the
@@ -197,7 +217,17 @@ shows as dark teeth along the hairline.
   each lock's own rise off it. The shading tangent loses its component along the head normal (by this much), so
   neighbouring locks shine together in broad bands instead of every short lock catching the light at its own bend and
   dotting the top with flecks. Only the highlight changes, never the shape. Unity: `LockData.surfaceShine`, applied to
-  the mesh tangents in AetherStrandWebMesh.
+  the mesh tangents in AetherStrandWebMesh. Before the flattening the tangent also leans (by the same amount) to the
+  lock's `shadeDir`, or without one to its own root-to-tip direction, so a lock that bends or gathers onto a clump keeps
+  one highlight along its length.
+- `shadeDir` (head-local vector, LockBuildSpec, exported per lock in Blender axes like `rootNormal`): the direction the
+  highlight follows with `surfaceShine`. Give neighbouring locks the comb direction at their roots and they shine
+  together. The highlight is almost all of a dark lock's brightness, so a lock (or the part of one) that misses it reads
+  as a dark dash; that was the dark dashes on the side of the undercut's top. Unity: `LockData.shadeDir`, parsed by
+  AetherStrandWebData and used by AetherStrandWebMesh.
+- Root highlight (all styles, web and Unity hair shaders and the preview): the highlight is held off the root only in
+  proportion to `scalpRoot` (fully from 0.5 up). A light-rooted lock lies on other hair, so it keeps its highlight to
+  the root; a root left uncovered at a crop's edge is then not a dark crescent.
 - `rootWidth` (0.05..1, LockBuildSpec, exported per lock): the width of the root end as a share of the lock's width. By
   default it follows `scalpRoot` (0.36, or 0.08 below 0.5), and the root widens to full over the first quarter of the
   lock, so the root is a rounded or pointed end. Near 1, with the root sunk in the scalp, the lock grows out of the skin
@@ -247,3 +277,8 @@ the preview is in the app too. Diffuse light also uses the normal blended 42% to
 with the raw card normal, cards seen edge-on showed as black leaves the app never draws.
 Root occlusion and layer AO follow the web shader too: the root darkens by `rootAO x 0.72 x scalpRoot` over the first
 22% of the lock, and layer AO scales by 0.72 + 0.32 x `layerAO`. The paint's `underShade` is drawn as in the app.
+
+Tracing a dark patch: render the same close-up with `--no-paint` (is it paint showing through gaps, or a lock?), then
+with the builder's under layer or clump cards switched off (whose lock is it?). If a lock is dark with no paint and no
+AO, it is missing the highlight, which is most of a dark lock's brightness: check its shading tangent (`surfaceShine`,
+`shadeDir`) and whether it is a root (`scalpRoot`) left uncovered.
