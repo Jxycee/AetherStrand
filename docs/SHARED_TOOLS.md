@@ -191,6 +191,23 @@ shows as dark teeth along the hairline.
       or paint shows between its chunks. Undercut: 0.055.
     - `chunkFrontJag` (rad, default 0): each front-row chunk starts a random way lower than the hairline, so the front edge
       is a row of uneven peaks rather than a ruled band. Undercut: 0.05, with `undercutHairlineWobble` 0.04.
+    - `chunkStand` (m, default 0): each chunk on the top and crown leans out of the hair surface along its length (fading
+      out down the back), so the top gains height and its tips stand up and out, instead of lying back with only the points
+      lifting. `chunkFrontStand` (default 1) is the front row's share; the front already rises with the quiff. Undercut:
+      0.045 and 0, with `spikeHeight` 0.03. Keep `pieceTwist` at 0 with chunks: a twisted crest chunk lies edge-on to the
+      side camera and reads as a thin streak over the top.
+    - `chunkUnderHeight` (default 1): height of the narrow under layer under the chunks. At full height it poked up between
+      and above them, the source of the side-view streaks. `chunkUnderEdgeIn` (rad, default `chunkEdgeIn`): the under
+      layer starts further inside the side edge, where no chunk covers it and its locks showed as dark leaves above the
+      temples. Undercut: 0.5 and 0.7 (`chunkEdgeIn` 0.45).
+    - `chunkMinLen` (0..1, default 0): drops chunks the hairline or fade cuts shorter than this share of their length
+      (stubs read as detached bits). `chunkAspect` (default 0.3): widest width as a share of length, so short chunks stay
+      broad. Undercut: 0.5 and 0.45, with `chunkLength` 1.25.
+    - `chunkBackWidth` (default 1) and `chunkBackTipWidth` (0..1, default 0): the back's chunks are wider and keep a share
+      of width to their ends, so the back is a few broad tapered pieces over the fade instead of thin points with the dark
+      fade between them. Undercut: 1.3 and 0.3, with `backTaper` 0.5.
+    - `chunkThickness` (default 0.32) and `chunkRoundness` (default 0.6): a chunk's cross-section. Tested higher for the
+      undercut; it only made the side and back look puffy, so the defaults stay.
   - `combDown` (0..1, default 0) with `whorlRadius: 0`: a combed-back crop has no visible whorl, so behind the ears the
     hair is combed straight down from where the top turns over the crown. Without it, flow away from the front meets
     again on the back of the head (a starburst), and a crown whorl in front of the back hair either crumples where the
