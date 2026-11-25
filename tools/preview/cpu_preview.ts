@@ -38,6 +38,9 @@ import { buildArchetypeSpecs, buildCustomHairSpecs, generateRandomHairstyle, nat
 import { conformPoint, loadCharacterHead, type HeadConformMap } from '../../src/engine/characterHead';
 import { captureHairShell, DEFAULT_SHELL_AZ_DEG, DEFAULT_SHELL_PHI_DEG, formatHairShell, hairShellJson, hairShellPolylines, shellSurfacePoint } from '../../src/engine/hairShell';
 import { compareMasks, fitSimilarity, headLandmarkPoints, loadRefSheet, refHairMask, resolveLandmarks, type OutlineResult } from './outline';
+import { computeProceduralHairTextureData, type HairTextureData } from '../../src/engine/hairTextures';
+import { bakeHairCards } from '../../src/engine/cardBake';
+import { displaySRGB, makeShadeEnv, rigLights, shadeHairPixel, SHEEN_DEFAULTS, SHEEN_LEGACY, type ShadeInput } from '../../src/engine/hairShadingModel';
 import { evalScalpPaint, hairlineJag, paintStreak, paintUnderShade, sampleArr, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
 
 const args = process.argv.slice(2);
@@ -54,6 +57,13 @@ if (arg('--recipe')) {
   recipe = { presetId: r.basePreset, customName: r.name, builder: r.builder, shader: r.shader, physics: r.physics };
 }
 const outPath = arg('--out', 'preview.png')!;
+// hair shading: by default every hair pixel is shaded by hairShadingModel.ts (the same maths as the viewport and Unity
+// shaders) with the strand maps the app uses. --vertex-shade: the old per-vertex approximation (faster).
+// --cards baked|procedural picks the strand maps (default: the recipe's shader.cardTextures, else baked);
+// --sheen legacy shades with the pre-v2 highlight settings (A/B); --lights world keeps the app's fixed light rig
+// (the back is then lit by the rim light only) instead of turning the rig with each view.
+const pixelShade = !args.includes('--vertex-shade');
+const lightsWorld = arg('--lights') === 'world';
 // --shell / --no-shell: the outer-shape grid (hairShell.ts)
 if (arg('--shell')) recipe.builder.shell = JSON.parse(fs.readFileSync(arg('--shell')!, 'utf8'));
 if (args.includes('--no-shell')) delete recipe.builder.shell;
@@ -167,6 +177,15 @@ const gridLines = (arg('--lines') ?? '').split(',').filter(Boolean).map((t, i) =
 const paint: ScalpPaint | null = usePaint ? hair.scalpPaint : null;
 // painted short hair: the paint's colour override, else the hair's own colour (same rule as the web app and Unity)
 const cPaint = scalpPaintColor(hair.scalpPaint, sh.rootColor ?? '#2a1e18', sh.baseColor ?? '#5a4030', sh.tipColor ?? '#7a5a40', sh.primarySpecColor, sh.primaryIntensity ?? 0.32);
+// strand maps and shading environment for per-pixel hair (hairShadingModel.ts)
+const cardKind = arg('--cards') ?? (sh.cardTextures === 'procedural' ? 'procedural' : 'baked');
+const strandMaps: HairTextureData = cardKind === 'procedural' ? computeProceduralHairTextureData() : bakeHairCards(sh.cardBake);
+const sheenBase = arg('--sheen') === 'legacy' ? SHEEN_LEGACY : SHEEN_DEFAULTS;
+const shaderFull = {
+  rootColor: '#2a1e18', baseColor: '#5a4030', tipColor: '#7a5a40', primarySpecColor: '#ffe8d0', secondarySpecColor: '#a07050',
+  primaryShift: 0.05, primaryPower: 76, primaryIntensity: 0.32, secondaryShift: -0.14, secondaryPower: 24, secondaryIntensity: 0.2,
+  rimIntensity: 0.3, rimPower: 3.4, rootAO: 0.74, grooveDepth: 0.6, strandVariation: 0.2, ...sh,
+};
 const grainAt = (az: number, phi: number) => {
   // (grainStretch: cells longer along phi, narrower across, same area)
   const gs = Math.sqrt(Math.max(1, paint?.grainStretch ?? 1));
@@ -476,11 +495,69 @@ function renderView(vi: number) {
   }
   // the head and paint alone, before the hair goes on, for the debug views
   const bodyZ = debugViews.length ? zbuf.slice() : null, bodyCol = debugViews.length ? col.slice() : null, bodyPaint = debugViews.length ? paintBuf.slice() : null, bodyKind = debugViews.length ? kindBuf.slice() : null;
+  // per-pixel hair: interpolate the vertex data and shade with hairShadingModel.ts (the viewport / Unity maths)
+  const viewRot = new THREE.Matrix4().makeBasis(r, u, d);
+  const env = makeShadeEnv(shaderFull as any, strandMaps, rigLights('studio', lightsWorld ? undefined : viewRot), sheenBase);
+  const tng = geo.attributes.aHairTangent.array as Float32Array;
+  const pin: ShadeInput = { u: 0, t: 0, seed: 0, layerAO: 0, cardMask: 0, scalpRoot: 0, gradT: 0, N: new THREE.Vector3(), headN: new THREE.Vector3(), T: new THREE.Vector3(), V: d.clone() };
+  const outC = [0, 0, 0];
+  const lerp3 = (arr: Float32Array, a: number, b: number, c: number, w0: number, w1: number, w2: number, o: THREE.Vector3) =>
+    o.set(w0 * arr[a * 3] + w1 * arr[b * 3] + w2 * arr[c * 3], w0 * arr[a * 3 + 1] + w1 * arr[b * 3 + 1] + w2 * arr[c * 3 + 1], w0 * arr[a * 3 + 2] + w1 * arr[b * 3 + 2] + w2 * arr[c * 3 + 2]);
+  const triHair = (a: number, b: number, c: number) => {
+    const p0 = vp[a], p1 = vp[b], p2 = vp[c];
+    const minX = Math.max(0, Math.floor(Math.min(p0[0], p1[0], p2[0]))), maxX = Math.min(W - 1, Math.ceil(Math.max(p0[0], p1[0], p2[0])));
+    const minY = Math.max(0, Math.floor(Math.min(p0[1], p1[1], p2[1]))), maxY = Math.min(H - 1, Math.ceil(Math.max(p0[1], p1[1], p2[1])));
+    if (minX > maxX || minY > maxY) return;
+    const area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+    if (Math.abs(area) < 1e-9) return;
+    // which side faces the viewer (as gl_FrontFacing: the geometric winding)
+    const front = area < 0;
+    for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5, py = y + 0.5;
+      const w0 = ((p1[0] - px) * (p2[1] - py) - (p2[0] - px) * (p1[1] - py)) / area;
+      const w1 = ((p2[0] - px) * (p0[1] - py) - (p0[0] - px) * (p2[1] - py)) / area;
+      const w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      const z = w0 * p0[2] + w1 * p1[2] + w2 * p2[2];
+      const idx = y * W + x;
+      if (z <= zbuf[idx]) continue;
+      pin.u = w0 * uv[a * 2] + w1 * uv[b * 2] + w2 * uv[c * 2];
+      pin.t = w0 * uv[a * 2 + 1] + w1 * uv[b * 2 + 1] + w2 * uv[c * 2 + 1];
+      pin.seed = seeds[a];
+      pin.layerAO = w0 * ao[a] + w1 * ao[b] + w2 * ao[c];
+      pin.cardMask = card[a];
+      pin.scalpRoot = w0 * scalpRootA[a] + w1 * scalpRootA[b] + w2 * scalpRootA[c];
+      pin.gradT = w0 * gradTA[a] + w1 * gradTA[b] + w2 * gradTA[c];
+      lerp3(nor, a, b, c, w0, w1, w2, pin.N).normalize();
+      // gl_FrontFacing flips the normal on back faces; use the interpolated normal's side when the winding is unreliable
+      if (pin.N.dot(d) < 0) pin.N.negate();
+      void front;
+      lerp3(headNA, a, b, c, w0, w1, w2, pin.headN).normalize();
+      lerp3(tng, a, b, c, w0, w1, w2, pin.T).normalize();
+      // fade caps: the shader's screen dither (interleaved gradient + white noise)
+      if (pin.cardMask > 0.15 && pin.cardMask < 0.45) {
+        const a0 = pin.cardMask; let fs = Math.abs(a0 - 0.25) < 0.002 ? 0.25 : Math.max(0, Math.min(1, (a0 - 0.16) / 0.28)); fs = fs < 0.9 ? Math.min(fs, 0.45) : fs;
+        const fu = sstepK(fs, 1, Math.max(0, Math.min(1, pin.t)));
+        const tail = sstepK(1 - 0.85, 1, fu);
+        const cov = (1 + (0.85 * (1 - 0.45 * fu) - 1) * sstepK(0, 0.2, fu)) * (1 - tail);
+        const fr = (q: number) => q - Math.floor(q);
+        const ign = fr(52.9829189 * fr(px * 0.06711056 + py * 0.00583715));
+        const wn = fr(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453);
+        if (cov - (ign + (wn - ign) * 0.45) < 0) continue;
+      }
+      if (!shadeHairPixel(pin, env, outC)) continue;
+      zbuf[idx] = z; kindBuf[idx] = 2; paintBuf[idx] = 0;
+      col[idx * 3] = outC[0]; col[idx * 3 + 1] = outC[1]; col[idx * 3 + 2] = outC[2];
+      hairPx[idx] = 1;
+    }
+  };
+  const hairPx = new Uint8Array(W * H);
   curKind = 2;
   for (let i = 0; i < index.length; i += 3) {
     const a0 = index[i], a1 = index[i + 1], a2 = index[i + 2];
     const hu = card[a0] > 0.5 ? [[uv[a0 * 2], uv[a0 * 2 + 1], seeds[a0]], [uv[a1 * 2], uv[a1 * 2 + 1], seeds[a0]], [uv[a2 * 2], uv[a2 * 2 + 1], seeds[a0]]] : undefined;
-    tri([vp[a0], vp[a1], vp[a2]], [vc[a0], vc[a1], vc[a2]], undefined, undefined, hu);
+    if (pixelShade) triHair(a0, a1, a2);
+    else tri([vp[a0], vp[a1], vp[a2]], [vc[a0], vc[a1], vc[a2]], undefined, undefined, hu);
   }
   // linear -> sRGB with a soft ACES-like shoulder
   for (let y = 0; y < H; y++) {
@@ -489,6 +566,10 @@ function renderView(vi: number) {
       const o = (y * W * views.length + vi * W + x) * 3;
       for (let k = 0; k < 3; k++) {
         let c = col[i * 3 + k];
+        if (pixelShade && hairPx[i]) {
+          if (k === 0) { const s3 = displaySRGB([col[i * 3], col[i * 3 + 1], col[i * 3 + 2]]); sheet[o] = s3[0]; sheet[o + 1] = s3[1]; sheet[o + 2] = s3[2]; }
+          continue;
+        }
         if (zbuf[i] > -1e8) {
           c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
           c = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;

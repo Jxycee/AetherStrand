@@ -596,16 +596,18 @@ export default function App() {
 
       const pack = texturePack ?? viewportRef.current?.getTexturePack();
       if (pack) {
-        const [grooveBlob, flowBlob, normalBlob, alphaBlob] = await Promise.all([
+        const [grooveBlob, flowBlob, normalBlob, alphaBlob, strandFlowBlob] = await Promise.all([
           canvasToPngBlob(pack.grooveAoCanvas),
           canvasToPngBlob(pack.flowIdCanvas),
           canvasToPngBlob(pack.normalCanvas),
           canvasToPngBlob(pack.alphaCardCanvas),
+          canvasToPngBlob(pack.flowCanvas),
         ]);
         zip.file('AetherStrand_Unity/Textures/AetherStrand_GrooveAO.png', grooveBlob);
         zip.file('AetherStrand_Unity/Textures/AetherStrand_FlowIDShift.png', flowBlob);
         zip.file('AetherStrand_Unity/Textures/AetherStrand_Normal.png', normalBlob);
         zip.file('AetherStrand_Unity/Textures/AetherStrand_AlphaCard.png', alphaBlob);
+        zip.file('AetherStrand_Unity/Textures/AetherStrand_StrandFlow.png', strandFlowBlob);
       }
 
       const content = await zip.generateAsync({ type: 'blob' });

@@ -156,10 +156,17 @@ namespace AetherStrand.Editor
                     if (mat.HasProperty("_SecondaryIntensity")) r.secondaryIntensity = R4(mat.GetFloat("_SecondaryIntensity"));
 
                     int texCnt = 0;
-                    foreach (string tp in new[] { "_GrooveAoMap", "_FlowIdMap", "_NormalMap", "_AlphaMap" })
-                        if (mat.HasProperty(tp) && mat.GetTexture(tp) != null) texCnt++;
+                    // _StrandFlowMap (baked strand direction, sheen v2) counts only on shaders that declare it.
+                    string[] texProps = { "_GrooveAoMap", "_FlowIdMap", "_NormalMap", "_AlphaMap", "_StrandFlowMap" };
+                    int texWanted = 0;
+                    foreach (string tp in texProps)
+                    {
+                        if (!mat.HasProperty(tp)) continue;
+                        texWanted++;
+                        if (mat.GetTexture(tp) != null) texCnt++;
+                    }
                     r.boundTextureCount = texCnt;
-                    if (texCnt < 4) r.flags.Add($"WARN: Only {texCnt}/4 AetherStrand textures bound on material");
+                    if (texCnt < texWanted) r.flags.Add($"WARN: Only {texCnt}/{texWanted} AetherStrand textures bound on material");
                 }
             }
             else
