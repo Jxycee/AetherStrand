@@ -26,7 +26,16 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 - `extendFrontPaint(paint, reach, width)` (hairBuilder.ts): moves the paint's full and edge lines `reach` rad down the
   forehead. Lock roots along a front hairline leave the scalp as a row of small teeth; on full-density paint they sit on
   hair colour instead of the paint's thin edge. Build the hair from the unextended cut (undercut:
-  `undercutFadeBasePaint`, reach 0.035).
+  `undercutFadeBasePaint`, reach 0.025). An optional `wobble(az)` (rad) moves both lines too, so the painted strip follows an
+  uneven lock edge (undercut: `undercutHairlineWobble`, see `hairlineWobble` below).
+- `hairlineWobble(amount, seed)` (hairBuilder.ts): a low, uneven wobble of about +-`amount` rad over the front, fading out
+  by |azimuth| 1.3. Add it to the locks' front edge and pass the same function to `extendFrontPaint`, so the forehead edge
+  isn't a ruled line and the strip under it matches. Keep it small: 0.025 put a visible step in the middle of the
+  forehead; 0.015 reads as a natural soft edge (undercut: 0.015, seeded from `config.seed`).
+- `fadeScalpPaint` `backBlend` (default 0): behind the ears the fade band grows by up to (1 + `backBlend`), full by the
+  nape. The fade then starts where short back locks end, instead of leaving a strip of solid paint between the lock ends
+  and the fade: under `underShade` that strip read as a dark horizontal shelf at the occiput. The hair extent must not use
+  it (undercut: `undercutFadeBasePaint(config, 0)` for the extent, 1.2 for the paint).
 
 ### Hairline look (all styles)
 
@@ -174,12 +183,20 @@ shows as dark teeth along the hairline.
     and the colour moves to the root end of the gradient, the colour of the painted short hair below. It also turns off
     the smooth-back lengthening (`backSmooth`) in proportion. The top then blends down into the fade with no long
     overhanging shelf and no ledge where the locks end. Not over the temples: the head bulges past the scalp ellipsoid
-    there and lowered locks dip into it (undercut: 1).
+    there and lowered locks dip into it (undercut: 1). Tapered locks are narrower, not wider (width cap
+    `realLen * (0.6 - 0.25 * backTaper)`), and the AO darkens by up to 35%: wide dark short locks over the painted fade
+    read as dangling leaves.
+  - `backTaperBand` (rad, default 0.45): how far inside the edge the back taper reaches. 0.9 spreads it over a tall band,
+    so the back gets shorter steadily and no cutoff line shows (undercut: 0.9).
+  - `backThin` (0..1, default 0): through the back taper, this share of locks is dropped, growing toward the edge
+    (squared), so the painted fade shows through more and more and carries the taper (undercut: 0.8).
   - Undercut: the top's locks end where a 0.6 fade would put the hair edge, whatever the recipe's `fadeHeight`. A lower
     `fadeHeight` (0.3) then only fills the sides with solid painted short hair up to the top, so the head reads full from
     the front, and the top keeps no long overhang at the back. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
-    painted side crisp, and the hairline is `roundedHairline(1.1, 0.02, 0.8)` with no temple recession, so the forehead
-    isn't tall and the temples aren't shaved up to the top.
+    painted side crisp. The hairline is `roundedHairline(1.1, 0.07, 0.75)` with `templeRecede` 0.1: a soft curve across
+    the forehead with a small recession at each temple corner (a straight 0.02 lift read as a cap brim in the 3/4 view),
+    plus `hairlineWobble(0.015)`. The top's `volume` is 0.75 of the old value and `spikeHeight` 0.045, for a tighter
+    crown; measured against the bald head, the back already lies close to the skull.
   - Every crop lock starts 3.2 mm off the scalp ellipsoid (was 2.5 mm), so nodes that cross the temple bulge on a
     character skull clear it after the conform.
   - Front hairline locks (`edgeK` > 0.4) have `scalpRoot` 0.3: their roots are about the colour of the painted strip they

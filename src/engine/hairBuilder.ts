@@ -623,6 +623,11 @@ export interface CropFieldOptions {
    *  lowers onto the scalp there and the locks take the root end of the colour gradient, so the top blends into a fade
    *  with no overhanging shelf. Also turns off the smooth-back lengthening (backSmooth) in proportion. Default 0. */
   backTaper?: number;
+  /** How far inside the edge (rad) the back taper reaches. Default 0.45; a taller band (0.9) has no cutoff line. */
+  backTaperBand?: number;
+  /** 0..1: through the back taper, this share of locks is dropped toward the edge (squared), so the painted short hair
+   *  shows through more and more and the top fades into it instead of ending along a line. Default 0. */
+  backThin?: number;
   /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
   colorRange?: [number, number];
   seed?: number;
@@ -720,7 +725,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   // backTaper: from behind the temples round the back, the crop tapers short toward the edge (1 on the edge, 0 from about
   // 13 cm inside it), so the top blends down into the fade instead of hanging over it as a long shelf
   // (not over the temples: there the head bulges past the scalp ellipsoid and lowered locks dip into it)
-  const taperAt = (u: THREE.Vector3) => (o.backTaper ?? 0) * _ss((Math.abs(azOf(u)) - 1.2) / 0.6) * (1 - _ss(insideHair(u) / 0.45));
+  const taperAt = (u: THREE.Vector3) => (o.backTaper ?? 0) * _ss((Math.abs(azOf(u)) - 1.2) / 0.6) * (1 - _ss(insideHair(u) / (o.backTaperBand ?? 0.45)));
   const hairSurface = (u: THREE.Vector3) => {
     const room = _ss((insideHair(u) + 0.05) / 0.45);
     const side = 1 - sideTaper * _ss((phiOf(u) - (o.sideTaperFrom ?? 0.85)) / 0.45);
@@ -811,7 +816,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       const fk = frontK(u);
       // toward the fade the crop thins out (fewer, narrower locks), so the paint under it shows through more and more
       const se = sideEdge(u);
-      if (rnd() < 0.55 * se * se) return; // (squared: fewer gaps where the band is shallow, so the temples never show lone locks on the paint)
+      // (and through a tapered back, fewer locks toward the edge: the painted short hair shows through more and more, so
+      // the top fades into it instead of ending along a line)
+      if (rnd() < 0.55 * se * se + (o.backThin ?? 0) * Math.pow(taperAt(u), 2)) return; // (squared: fewer gaps where the band is shallow, so the temples never show lone locks on the paint)
       const g = nearestGuide(u);
       // the outer layer lies on the hair surface, the under layer below it; a hair's breadth of order between locks
       const layerMul = (outer ? 1 : 0.85) * (g ? g.vol : 1), order = outer ? 0.0015 * rnd() : 0;
@@ -858,10 +865,10 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       specs.push({
         pointsLocal: pts,
         // front hairline locks are seen face on as they rise: a little wider so the front reads full, not as a comb
-        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6 + 0.4 * bt)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
+        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6 - 0.25 * bt)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
         // the under layer is darker, except at the front hairline where it is seen face on beside the outer locks
         // (toward the fade the layers lie flat on the paint: no under-layer shadow, so the edge isn't a dark rim)
-        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.55 * bt), layerOrder: outer ? 3 : 2, smooth: 2,
+        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.35 * bt), layerOrder: outer ? 3 : 2, smooth: 2,
         // (in the turn from combed back to combed down above the ear, tips taper sooner and melt into the layer below
         // instead of ending as hard wedges)
         tipStart: (outer ? 0.5 : 0.6) + 0.15 * backK - (o.turnTaper ?? 0) * _ss((Math.abs(az0) - 0.9) / 0.4) * (1 - _ss((Math.abs(az0) - 2.2) / 0.4)), lockNormal: false,
@@ -984,6 +991,11 @@ export interface FadePaintOptions extends EarCutOptions {
    * edge, so the top length melts into the short sides; 0 = a tight band with a crisp edge. Default 0.5.
    */
   blend?: number;
+  /**
+   * 0..1+: behind the ears the fade band grows by (1 + backBlend), reaching full size at the nape, so a taper at the back
+   * starts right where the back locks end instead of leaving a solid painted strip (a dark shelf) between them. Default 0.
+   */
+  backBlend?: number;
 }
 
 /**
@@ -1010,7 +1022,8 @@ export function fadeScalpPaint(o: FadePaintOptions = {}): ScalpPaint {
       // (topPhi caps how high the fade climbs; where the hairline itself is higher, as at raised temple corners, the
       // hairline wins, so the paint never runs solid past the cut line)
       const fb = (1 - sideK) * (o.frontBlend ?? 0);
-      return Math.max(Math.min(top, cut - fb), cut - sideK * band * (1 - (o.sideburnSolid ?? 0.6) * sb) - fb);
+      const backK = 1 + (o.backBlend ?? 0) * _ss((a - (EAR_BACK_THETA + 0.1)) / 0.6);
+      return Math.max(Math.min(top, cut - fb), cut - sideK * band * backK * (1 - (o.sideburnSolid ?? 0.6) * sb) - fb);
     },
     edge: (az) => earAlignedCutPhi(Math.abs(az), o),
     edgeDensity: (az) => THREE.MathUtils.lerp(0.55, o.stubble ?? 0.2, _ss((Math.abs(az) - 0.75) / 0.6)),
@@ -1028,6 +1041,16 @@ export function roundedHairline(centre = 1.28, cornerLift = 0.06, width = 0.7): 
   return (az) => centre - cornerLift * Math.pow(Math.min(1, Math.abs(az) / width), 2);
 }
 
+/**
+ * Irregular hairline (rad by signed azimuth, to add to a hairline phi): a low, uneven wobble of about +-`amount` over the
+ * front (fading out by |azimuth| 1.3), so the edge where hair meets forehead is not a ruled line. Use the same wobble for
+ * the locks' edge and anything else that must follow it.
+ */
+export function hairlineWobble(amount: number, seed = 0): (az: number) => number {
+  return (az) => amount * (0.55 * Math.sin(7.3 * az + 1.1 + seed) + 0.3 * Math.sin(13.7 * az + 2.3 + 1.7 * seed) + 0.15 * Math.sin(23.1 * az + 0.4 + seed))
+    * (1 - _ss((Math.abs(az) - 0.9) / 0.4));
+}
+
 /** Lowest natural hairline (phi by signed azimuth): automatic scalp paint never goes past it onto the face, ears or neck. */
 export function naturalMaxHairlinePhi(az: number): number {
   return earAlignedCutPhi(az, { sideburnLength: 0.7, hairlinePhi: 1.3, templeRecede: 0.04, napePhi: 2.2 });
@@ -1042,7 +1065,7 @@ export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx
 /** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
 export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
   return {
-    hairlinePhi: roundedHairline(1.1, 0.02, 0.8), templeRecede: 0, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.5,
+    hairlinePhi: roundedHairline(1.1, 0.07, 0.75), templeRecede: 0.1, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.5,
     earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.4, config.backLength), napeCurve: 0.8,
   };
 }
@@ -1052,22 +1075,27 @@ export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
  * (each ribbon crosses the skin at a slight slant); with full-density paint under that row instead of the paint's thin
  * edge, the teeth sit on hair colour and the hairline reads as hair growing out of a soft painted edge.
  */
-export function extendFrontPaint(p: ScalpPaint, reach: number, width = 0.9): ScalpPaint {
+export function extendFrontPaint(p: ScalpPaint, reach: number, width = 0.9, wobble?: (az: number) => number): ScalpPaint {
   if (reach <= 0) return p;
-  const k = (i: number) => reach * (1 - _ss((Math.abs(binAzimuth(i, p.bins)) - width * 0.6) / (width * 0.4)));
+  // (wobble: the same uneven edge as the locks' hairline, hairlineWobble, so the painted strip follows it)
+  const k = (i: number) => { const az = binAzimuth(i, p.bins); return reach * (1 - _ss((Math.abs(az) - width * 0.6) / (width * 0.4))) + (wobble ? wobble(az) : 0); };
   return { ...p, fullPhi: p.fullPhi.map((v, i) => v + k(i)), edgePhi: p.edgePhi.map((v, i) => v + k(i)) };
 }
 
 /** Painted sides of undercut-fade (also where its top hair drapes to). */
 export function undercutFadePaint(config: HairBuilderConfig): ScalpPaint {
   // (front hairline row of roots sits on full paint; the hair itself is placed from the unextended cut, undercutFadeBasePaint)
-  return extendFrontPaint(undercutFadeBasePaint(config), 0.035);
+  return extendFrontPaint(undercutFadeBasePaint(config), 0.025, 0.9, undercutHairlineWobble(config));
+}
+/** The uneven front edge of undercut-fade, shared by its locks and its painted strip. */
+export function undercutHairlineWobble(config: HairBuilderConfig): (az: number) => number {
+  return hairlineWobble(0.015, (config.seed || 1337) * 0.001);
 }
 /** undercut-fade paint before extendFrontPaint: the cut the hair is built to. */
-export function undercutFadeBasePaint(config: HairBuilderConfig): ScalpPaint {
+export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 1.2): ScalpPaint {
   // thin tapered sideburn (mostly faded), wide soft blend from the top length into the short sides
   // (shaded under the hair, so the side locks lie on darker short hair instead of ending as dark leaves on a lit band)
-  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75 }), underShade: 0.5 };
+  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend }), underShade: 0.5 };
 }
 SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => undercutFadePaint(config);
 
@@ -2670,16 +2698,18 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
     // rising up and back, everything getting shorter and flatter down to where the painted fade takes over
     // (the top's locks end at the line a 0.6 fade would give whatever fadeHeight is: a lower fadeHeight fills the sides with
     // solid painted short hair up to meet the top, the head reads full from the front, and the top keeps no long overhang)
-    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6) });
+    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6) }, 0); // (extent: no back blend)
+    // (an uneven front edge: hair meets the forehead along a soft wobble, not a ruled line)
+    const wob = undercutHairlineWobble(config);
     cropFieldLocks(specs, {
       seed: seedU + 33, wMul, sweep: sweepSign * 0.9,
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
-      hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 1, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 1, backTaperBand: 0.9, backThin: 0.8, spikeHeight: 0.045, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
-      length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,
+      length: 0.1 + 0.03 * config.crownVolume, volume: 0.75 * (0.02 + 0.016 * config.crownVolume),
       spike: 0.6 + 0.8 * config.spikeLift, stand: 0.55 + 0.3 * config.spikeLift,
     });
 
