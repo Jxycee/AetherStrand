@@ -36,6 +36,8 @@
 //   (ambient only), key only, rim only and full. --turntable: 8 views every 45 degrees instead of the standard set.
 //   --pair refs/style_views.json writes <out>_pair.png: each view after the game reference panel at that angle, framed to
 //   the reference head size by its chin and ear-top landmarks unless --zoom / --cy are given.
+//   Hybrid (phase 1): --mass builds the inner mass and drops the base shells, --edge-cards N adds strand cards,
+//   --mass-only / --mass-tint show the mass alone / flat cyan; --pose turn|nod draws the hair mid head motion.
 //   --no-hair hides the hair. --grid overlays the scalp coordinate grid on the head (blue |azimuth|, red phi, every 0.1 rad, thick lines at 0.5).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -95,6 +97,17 @@ const shellGrid = recipe.builder.shell ?? null;
   if (arg('--shell-capture')) fs.writeFileSync(arg('--shell-capture')!, hairShellJson({ ...result, mirror: mir, strength: 1 }));
 }
 
+// --mass (hybrid plan phase 1): build the inner hair mass (hairMass.ts) and drop the base-shell ribbons, as
+// builder.hybrid.mass does in a recipe; --mass-height 0.6 sets its height share; --no-mass turns a recipe's mass off.
+// --mass-only draws the mass without the locks; --mass-tint draws it flat cyan, so every place it shows through the
+// locks is easy to see.
+if (args.includes('--mass')) recipe.builder.hybrid = { ...(recipe.builder.hybrid ?? {}), mass: true };
+if (arg('--mass-height')) recipe.builder.hybrid = { ...(recipe.builder.hybrid ?? {}), massHeight: Number(arg('--mass-height')) };
+if (args.includes('--no-mass') && recipe.builder.hybrid) recipe.builder.hybrid.mass = false;
+// --edge-cards N: N thin strand cards split off the outline locks (hairCards.ts), as builder.hybrid.edgeCards
+if (arg('--edge-cards')) recipe.builder.hybrid = { ...(recipe.builder.hybrid ?? {}), edgeCards: Number(arg('--edge-cards')) };
+const massOnly = args.includes('--mass-only'), massTint = args.includes('--mass-tint');
+
 // ---------- hair, exactly as the viewport loads it ----------
 const hair: any = new HairPhysicsSystem(new THREE.ShaderMaterial(), recipe.presetId);
 const rootGroup = new THREE.Group();
@@ -113,7 +126,76 @@ if (headArg && !args.includes('--no-conform')) {
 const wScale = recipe.physics?.strandWidthScale ?? 1;
 hair.snapToHead(headPivot, wScale);
 const audit = hair.auditQuality(headPivot, 'rest');
-const geo: THREE.BufferGeometry = hair.geometry;
+// --pose turn|nod (hybrid plan phase 1 deformation check): runs the live solver from the rest pose through a head motion
+// and draws the hair where it is at the moment of most lag, in the head's own frame (the head mesh stays put, the hair
+// shows its offset from the head). turn = the app's own turn motion (HairViewport applyMotionPose: +-0.62 rad yaw),
+// frozen at its first swing through centre, where the head moves fastest; nod = +-0.35 rad pitch at 2.6 rad/s, frozen at
+// its centre crossing too. Prints the mass's largest edge stretch over the whole run.
+const poseArg = arg('--pose');
+let poseReport: Record<string, number> | null = null;
+if (poseArg) {
+  const physics: any = { ...(recipe.physics ?? {}), showColliders: false, showBones: false };
+  const freezeT = poseArg === 'nod' ? Math.PI / 2.6 : Math.PI / 2.15;
+  const frames = Math.round(freezeT * 60);
+  let worst = 0;
+  (hair as any).measureMassStretch = true;
+  for (let f = 1; f <= frames; f++) {
+    const t = f / 60;
+    if (poseArg === 'turn') {
+      const swing = Math.sin(t * 2.15);
+      headPivot.position.set(swing * 0.022, 0.44 + Math.cos(t * 4.3) * 0.012, 0);
+      headPivot.rotation.set(Math.sin(t * 1.4) * 0.055, swing * 0.62, -swing * 0.085);
+    } else if (poseArg === 'nod') {
+      headPivot.position.set(0, 0.44, 0);
+      headPivot.rotation.set(Math.sin(t * 2.6) * 0.35, 0, 0);
+    } else throw new Error('--pose turn|nod');
+    rootGroup.updateMatrixWorld(true);
+    hair.step(1 / 60, headPivot, rootGroup, physics);
+    worst = Math.max(worst, hair.massStretch ?? 0);
+  }
+  // back into the head's rest frame for drawing
+  headPivot.updateMatrixWorld(true);
+  const hq = new THREE.Quaternion(), hpw = new THREE.Vector3(), hs = new THREE.Vector3();
+  headPivot.matrixWorld.decompose(hpw, hq, hs);
+  const iq = hq.clone().invert(), rest0 = new THREE.Vector3(0, 0.44, 0), v = new THREE.Vector3();
+  const toHead = (g: THREE.BufferGeometry) => {
+    for (const name of ['position', 'normal', 'aHeadNormal', 'aHairTangent']) {
+      const a = g.attributes[name].array as Float32Array;
+      for (let i = 0; i < a.length; i += 3) {
+        v.set(a[i], a[i + 1], a[i + 2]);
+        if (name === 'position') v.sub(hpw).applyQuaternion(iq).add(rest0); else v.applyQuaternion(iq);
+        a[i] = v.x; a[i + 1] = v.y; a[i + 2] = v.z;
+      }
+    }
+  };
+  toHead(hair.geometry);
+  if (hair.mass) toHead(hair.mass.geometry);
+  poseReport = { frames, massStretchMaxPct: +(worst * 100).toFixed(2), massStretchNowPct: +((hair.massStretch ?? 0) * 100).toFixed(2) };
+  console.error('pose', poseArg, JSON.stringify(poseReport));
+}
+// the mass, when built, is drawn with the locks in one buffer (same attributes); massStart = its first vertex
+let geo: THREE.BufferGeometry = hair.geometry;
+let massStart = Infinity;
+if (hair.mass) {
+  const m = hair.mass, lg: THREE.BufferGeometry = hair.geometry;
+  const nL = lg.attributes.position.count;
+  massStart = massOnly ? 0 : nL;
+  const g = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'aHeadNormal', 'aHairTangent', 'uv', 'aStrandSeed', 'aLayerAO', 'aCardMask', 'aScalpRoot', 'aGradT']) {
+    const a = lg.attributes[name] as THREE.BufferAttribute, b = m.geometry.attributes[name] as THREE.BufferAttribute;
+    const arr = new Float32Array((massOnly ? 0 : a.array.length) + b.array.length);
+    if (!massOnly) arr.set(a.array as Float32Array, 0);
+    arr.set(b.array as Float32Array, massOnly ? 0 : a.array.length);
+    g.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize));
+  }
+  const li = massOnly ? new Uint32Array(0) : (lg.index!.array as Uint32Array), mi = m.geometry.index!.array as ArrayLike<number>;
+  const idx = new Uint32Array(li.length + mi.length);
+  idx.set(li, 0);
+  for (let i = 0; i < mi.length; i++) idx[li.length + i] = mi[i] + massStart;
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo = g;
+  console.error('mass', JSON.stringify({ ...m.stats, meanMm: +m.stats.meanMm.toFixed(2), maxMm: +m.stats.maxMm.toFixed(2), vertices: m.vertexCount, locks: hair.locks.length }));
+}
 
 // ---------- bust proxy (dimensions copied from src/engine/bustModel.ts) ----------
 type Mesh = { geo: THREE.BufferGeometry; color: THREE.Color; flat?: boolean; scalpMask?: boolean; paint?: boolean };
@@ -604,7 +686,8 @@ function renderView(vi: number) {
         const wn = fr(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453);
         if (cov - (ign + (wn - ign) * 0.45) < 0) continue;
       }
-      if (!shadeHairPixel(pin, env, outC)) continue;
+      if (massTint && a >= massStart) { outC[0] = 0; outC[1] = 0.55; outC[2] = 0.6; }
+      else if (!shadeHairPixel(pin, env, outC)) continue;
       zbuf[idx] = z; kindBuf[idx] = 2; paintBuf[idx] = 0;
       col[idx * 3] = outC[0]; col[idx * 3 + 1] = outC[1]; col[idx * 3 + 2] = outC[2];
       hairPx[idx] = 1;
@@ -869,7 +952,7 @@ console.log(JSON.stringify({
   name: recipe.customName, out: outPath,
   locks: hair.locks.length, triangles: (geo.index!.count / 3) | 0,
   scalpCoveragePct: pick('scalpCoveragePct'), floatingRootCount: pick('floatingRootCount'), penetratingNodes: pick('penetratingNodes'),
-  crownHookCount: pick('crownHookCount'), interLockClipPct: pick('interLockClipPct'), score: pick('score'), verdict: audit.verdict,
+  crownHookCount: pick('crownHookCount'), interLockClipPct: pick('interLockClipPct'), score: pick("score"), verdict: audit.verdict, pose: poseReport,
   ...(osheet ? { outline, outlineScore: ov.length ? Math.round((100 * ov.reduce((a, o) => a + o.iou, 0)) / ov.length) : null, outlineImage: outlinePath } : {}),
   ...(ssheet ? { shellImage: shellPath } : {}),
   ...(debugViews.length ? { debugImages: debugPaths } : {}),

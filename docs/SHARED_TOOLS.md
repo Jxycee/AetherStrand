@@ -485,6 +485,10 @@ Recipe `shader.cardBake` (all optional; defaults in `CARD_BAKE_DEFAULTS`, slider
 | `--look game\|legacy` | `game` (default): mid-grey backdrop, skin-toned head, hair and body lit by one rig (key upper left, fill right, rim behind). `legacy`: the old navy backdrop, plaster head and studio rig; with `--aa 1` it matches earlier renders exactly. |
 | `--layers` | Also write `<out>_layers.png`: the first view as base (ambient only), key only, rim only and full. |
 | `--turntable` | 8 views every 45 degrees (`t0` front, `t90` left profile, `t180` back) instead of the standard set. |
+| `--mass` / `--mass-height F` / `--no-mass` | Hybrid phase 1: build the inner hair mass (`hairMass.ts`) and drop the base shells (or force it off when the recipe's `builder.hybrid` turns it on). `--mass-height` is the mass height as a share of the locks' height (default 0.6). |
+| `--mass-only` / `--mass-tint` | Draw only the mass, or draw it flat cyan among the locks (shows where it shows through). |
+| `--edge-cards N` | Add N thin strand cards at the silhouette (`hairCards.ts`). |
+| `--pose turn\|nod` | Run the live solver through the app's turn motion (or a nod) and draw the hair at its first swing through centre, in the head's frame. Prints `pose {..., massStretchMaxPct}`: the mass's largest edge stretch over the run. |
 | `--pair refs/style_views.json` | Also write `<out>_pair.png`: each view after the game reference panel at that angle, framed to the reference head by its chin and ear-top landmarks (unless `--zoom`/`--cy` are given). |
 | `--ref refs/style_views.json` | Outline score against a reference (needs `--head`). See below. |
 | `--shell grid.json` / `--no-shell` | Use that shape shell instead of the recipe's, or none. See Shape shell. |

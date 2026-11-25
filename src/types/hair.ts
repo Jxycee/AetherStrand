@@ -107,6 +107,22 @@ export interface HairBuilderConfig {
   earLandmarks?: { earFrontTheta: number; earBackTheta: number; earCenterTheta: number; earTopPhi: number; earMidPhi: number; earLobePhi: number; napePhi?: number };
   /** Optional outer-shape grid (hairShell.ts): moves the built locks in or out so the hair surface meets it. */
   shell?: HairShellGrid;
+  /**
+   * Optional hybrid pipeline (hybrid plan, phase 1 prototype). Absent = the style builds exactly as before.
+   * mass: a closed inner hair surface under the locks (hairMass.ts) replaces the wide base-shell ribbons.
+   */
+  hybrid?: HairHybridConfig;
+}
+
+export interface HairHybridConfig {
+  /** Build the inner mass and drop the base-shell ribbons. */
+  mass?: boolean;
+  /** Mass height as a share of the locks' outer height (default 0.6). */
+  massHeight?: number;
+  /** Thin strand cards split off the outline locks (hairCards.ts); 0 or absent = none. */
+  edgeCards?: number;
+  /** Seed for the mass's and cards' variation (default: the builder seed). */
+  seed?: number;
 }
 
 export interface ShaderConfig {

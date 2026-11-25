@@ -10,11 +10,18 @@ import {
   PhysicsConfig,
 } from '../types/hair';
 import { buildCustomHairSpecs, LockBuildSpec, naturalMaxHairlinePhi, scalpPaintForConfig } from './hairBuilder';
-import { deriveScalpPaint, evalScalpPaint, scalpAngles, type ScalpPaint } from './scalpPaint';
+import { deriveScalpPaint, evalScalpPaint, sampleArr, scalpAngles, type ScalpPaint } from './scalpPaint';
 import { conformPoint, headConformClearance, isBelowHairlineCap, type HeadConformMap } from './characterHead';
+import { buildHairMass, deformHairMass, type HairMass } from './hairMass';
+import { edgeCardSpecs } from './hairCards';
 
 // skull of the loaded character head (conformToHead); when set, head collisions use it instead of the mannequin skull
 let _activeConform: HeadConformMap | null = null;
+const _massInvQuat = new THREE.Quaternion();
+/** The hybrid mass stops this far (radians, about 44 mm on the web head) above the painted hairline: the band below shows
+ *  the painted short hair between hanging tips, as the base shells left it, and keeps the mass's edge up under the locks. */
+const MASS_PAINT_BAND = 0.15;
+const _massTmp = new THREE.Vector3();
 
 export interface SphereColliderDef {
   localCenter: THREE.Vector3;
@@ -3199,6 +3206,16 @@ function bakeInterLockRestPose(
 
 export class HairPhysicsSystem {
   public readonly hairMesh: THREE.Mesh;
+  /** Hybrid pipeline (builder.hybrid): settings, the inner mass and its mesh (a child of hairMesh). */
+  private hybrid: (import('../types/hair').HairHybridConfig & { seed: number }) | null = null;
+  public mass: HairMass | null = null;
+  public massMesh: THREE.Mesh | null = null;
+  /** Largest edge stretch of the mass on the last update (0.1 = 10%). */
+  public massStretch = 0;
+  /** Set to measure massStretch each frame (deformation audit; it walks every mass edge, so off in the app). */
+  public measureMassStretch = false;
+  private massNodes: Float32Array | null = null;
+  private massFootprint: THREE.Vector3[][] = [];
   public readonly colliderDebugGroup: THREE.Group;
   public readonly boneDebugLines: THREE.LineSegments;
 
@@ -3289,10 +3306,21 @@ export class HairPhysicsSystem {
   public loadCustomBuilder(config: HairBuilderConfig, basePreset: HairPresetId = this.activePreset): HairSimulationStats {
     this.activePreset = basePreset;
     this.isCustomBuilder = true;
-    const specs = buildCustomHairSpecs(config);
-    this.scalpPaint = scalpPaintForConfig(config, specs);
-    this.locks = locksFromSpecs(specs, config.seed || 1337);
+    const allSpecs = buildCustomHairSpecs(config);
+    this.scalpPaint = scalpPaintForConfig(config, allSpecs);
+    // hybrid mass: the inner surface (hairMass.ts) takes the base shells' job, so they are not built as locks. The paint
+    // above is still measured on every spec, so the painted hairline is the same with or without the mass.
+    this.hybrid = config.hybrid?.mass || config.hybrid?.edgeCards ? { ...config.hybrid, seed: config.hybrid.seed ?? (config.seed || 1337) } : null;
+    // where the base shells would have been is where the mass goes (their footprint marks the scalp to cover)
+    this.massFootprint = this.hybrid?.mass ? allSpecs.filter((s) => s.isBaseShell).map((s) => s.pointsLocal.map((p) => p.clone())) : [];
+    // hybrid edge cards: thin strand cards split off the outline locks (hairCards.ts), appended last so every other
+    // lock keeps its seeded variation
+    const cards = this.hybrid?.edgeCards ? edgeCardSpecs(allSpecs, { count: this.hybrid.edgeCards, seed: this.hybrid.seed }) : [];
+    this.locks = locksFromSpecs(cards.length ? allSpecs.concat(cards) : allSpecs, config.seed || 1337);
     bakeCollisionFreeRestPose(this.locks);
+    // the base shells go only after the build and the rest-pose bake: locksFromSpecs draws per-lock variation from one
+    // seeded sequence and the bake pushes locks off each other, so dropping them earlier would move every other lock
+    if (this.hybrid?.mass) this.locks = this.locks.filter((l) => !l.isBaseShell);
     this.bakedWidthScale = 1.0;
     this.lastWidthScale = 1.0;
     this.buildCohesionGraph();
@@ -3300,7 +3328,46 @@ export class HairPhysicsSystem {
     this.simTime = 0;
     this.impulseVel.set(0, 0, 0);
     this.buildVolumetricBuffers();
+    this.rebuildMass();
     return this.getStats();
+  }
+
+  /** The hybrid mass for the current locks and head conform (null without builder.hybrid.mass). */
+  private rebuildMass(): void {
+    if (this.massMesh) { this.hairMesh.remove(this.massMesh); this.massMesh = null; }
+    this.mass = null;
+    if (!this.hybrid?.mass || !this.locks.length) return;
+    const map = _activeConform;
+    this.mass = buildHairMass(
+      this.locks.map((l) => ({ points: l.particles.map((p: any) => (p.builtRest ?? p.restLocal) as THREE.Vector3), isBaseShell: l.isBaseShell, isFadeCap: l.isFadeCap })),
+      this.locks.map((l) => l.particles.map((p) => p.restLocal)),
+      { maxPhi: naturalMaxHairlinePhi, heightFrac: this.hybrid.massHeight, seed: this.hybrid.seed, footprint: this.massFootprint, lowerPhi: this.scalpPaint ? ((paint) => (az: number) => sampleArr(paint.fullPhi, az) - MASS_PAINT_BAND)(this.scalpPaint) : undefined, conform: map ? (p) => conformPoint(map, p, naturalMaxHairlinePhi, true) : undefined },
+    );
+    this.massNodes = new Float32Array(this.mass.restNodes.length);
+    // a child of the lock mesh, which stays at the origin: the mass geometry is written in world space like the locks
+    this.massMesh = new THREE.Mesh(this.mass.geometry, this.hairMesh.material);
+    this.massMesh.frustumCulled = false;
+    this.massMesh.castShadow = true;
+    this.massMesh.receiveShadow = true;
+    this.hairMesh.add(this.massMesh);
+  }
+
+  /** Follows the solver: called after the lock buffers are written. Returns the mass's largest edge stretch. */
+  private updateMass(headPos: THREE.Vector3, headQuat: THREE.Quaternion): number {
+    const m = this.mass;
+    if (!m) return 0;
+    const inv = _massInvQuat.copy(headQuat).invert();
+    const nodes = this.massNodes!;
+    for (let s = 0; s < this.locks.length; s++) {
+      const ps = this.locks[s].particles;
+      for (let k = 0; k < ps.length; k++) {
+        _massTmp.copy(ps[k].pos).sub(headPos).applyQuaternion(inv);
+        const o = (s * m.nodesPerLock + k) * 3;
+        nodes[o] = _massTmp.x; nodes[o + 1] = _massTmp.y; nodes[o + 2] = _massTmp.z;
+      }
+    }
+    this.massStretch = deformHairMass(m, nodes, headQuat, headPos, this.measureMassStretch);
+    return this.massStretch;
   }
 
   /**
@@ -3623,6 +3690,7 @@ export class HairPhysicsSystem {
       const hangs = ps.some((pt) => isBelowHairlineCap(pt.restLocal, naturalMaxHairlinePhi));
       for (const pt of ps) conformPoint(map, pt.restLocal, naturalMaxHairlinePhi, !hangs);
     }
+    this.rebuildMass();
   }
 
   public snapToHead(headPivot: THREE.Object3D, widthScale = this.lastWidthScale): void {
@@ -5486,7 +5554,7 @@ export class HairPhysicsSystem {
 
     if (updateBones) {
       (this.boneDebugLines.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
-    }
+    }    this.updateMass(headPos, headQuat);
   }
 
   public dispose(): void {
