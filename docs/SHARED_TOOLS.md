@@ -281,6 +281,37 @@ the port should keep the same two-way rule.
 | `--no-hair` | Hide the hair (head and paint only). |
 | `--grid` | Draw the scalp coordinate grid on the head: blue lines of \|azimuth\|, red lines of phi, every 0.1 rad. |
 | `--lines th:1.43,ph:1.68,...` | Draw only these scalp lines (theta = \|azimuth\|, ph = phi), coloured blue, cyan, red, orange, green, yellow, magenta, white in order. Use it to place landmarks and cut lines on a head. |
+| `--ref refs/style_views.json` | Outline score against a reference (needs `--head`). See below. |
+
+### Outline score (`--ref`)
+
+Why: styles were tuned one number at a time and judged by eye from a rough render, so "closer to the reference" was a
+guess. The outline score lines each reference view up with the render and measures the gap, so a change can be checked.
+
+How it works (tools/preview/outline.ts):
+- A JSON sidecar next to the reference image gives, per view (`front`, `3q`, `left`, `back`), the panel's `crop` and a
+  few landmarks in panel pixels: `chin`, `earTop`/`earLobe` (the ear nearer the camera) or `earTopL`/`earTopR`/
+  `earLobeL`/`earLobeR` (the ear on the image's left/right). Optional per view: `mirror`, `hairLumMax` (default 95),
+  `hairRowsBelowLobe` (default 0.3 ear heights), `ownScale`. Example: tools/hair-blocks/refs/undercut-fade_views.json.
+- The same landmarks are measured on the character head (chin front; each ear's top and lobe from the head's ear
+  landmarks) and projected into each view. One head size is shared by every view, taken from the views that show both
+  ears (front, back); each view then gets only its own offset. (Fitting each view's own size let a profile's different
+  chin-to-ear span shrink the reference by 30%.)
+- The reference's hair is the largest dark region above a row a little below the ear lobe, with small highlight holes
+  closed. The render's hair is every lock pixel plus scalp paint at alpha 0.6 or more, front faces only.
+- Printed per view: `iou` (overlap / union), `over` (hair the render has and the reference doesn't, as a share of the
+  reference's hair: too big or too low) and `under` (reference hair the render misses: too small or too high), plus
+  `outlineScore` = mean IoU x 100.
+- `<out>_outline.png`: the render with red where only the render has hair, blue where only the reference has it, the
+  reference outline in cyan, and the landmarks (yellow: head, magenta: reference after the fit). Look at it before you
+  trust a number: a wrong landmark shows as yellow and magenta dots apart.
+
+Read it as a target for the outline, not a verdict: the reference is another person's head, so a few percent is face
+shape. Faded sides that are lighter than the reference's dark short hair also show blue.
+
+Adding a reference: write the sidecar, place the landmarks by eye at 4x zoom, run once and check the dots and the cyan
+outline in the overlay. If the hair mask catches the shirt, eyebrows or the ear's shadow, lower `hairLumMax` or
+`hairRowsBelowLobe`.
 
 The JSON line the preview prints is `hair.auditQuality` (coverage, floating roots, penetration, crown hooks, clipping,
 score, verdict). Crown hooks skip rigid locks, whose rise off the scalp is built in, not the solver hooking a strand up.

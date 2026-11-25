@@ -13,6 +13,10 @@
 //   ears and neck; no scalp core, so gaps show skin as they do in Unity)
 //   Scalp paint (the painted short-hair layer, scalpPaint.ts) is drawn on the head. --no-paint hides it; --magenta paints the
 //   bust's haired region magenta instead (old gap check).
+//   --ref refs/style_views.json (with --head): outline score. Lines each reference view up with the render by its landmarks
+//   (chin, ear top, ear lobe; see outline.ts) and compares the hair masks: prints IoU / over / under per view and writes
+//   <out>_outline.png (red: hair the render has and the reference doesn't; blue: reference hair the render misses; cyan:
+//   the reference outline).
 //   --no-hair hides the hair. --grid overlays the scalp coordinate grid on the head (blue |azimuth|, red phi, every 0.1 rad, thick lines at 0.5).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -20,6 +24,7 @@ import * as THREE from 'three';
 import { HairPhysicsSystem } from '../../src/engine/hairPhysics';
 import { generateRandomHairstyle, scalpRegionPhi } from '../../src/engine/hairBuilder';
 import { loadCharacterHead } from '../../src/engine/characterHead';
+import { compareMasks, fitSimilarity, headLandmarkPoints, loadRefSheet, refHairMask, resolveLandmarks, type OutlineResult } from './outline';
 import { evalScalpPaint, hairlineJag, paintStreak, paintUnderShade, sampleArr, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
 
 const args = process.argv.slice(2);
@@ -81,8 +86,11 @@ const P = M([0, 0.44, 0]);
 const V2 = (a: number, b: number) => new THREE.Vector2(a, b);
 const headPath = arg('--head');
 let scalpCoreMesh: Mesh | null = null;
+let headLm: Record<string, THREE.Vector3> | null = null;
 if (headPath) {
   const ch = loadCharacterHead(fs.readFileSync(headPath, 'utf8'), headPath, arg('--chin-y') ? Number(arg('--chin-y')) : undefined);
+  headLm = headLandmarkPoints(ch.positions, ch.landmarks);
+  for (const k of Object.keys(headLm)) headLm[k].y += 0.44;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(ch.positions, 3));
   add(g, P, '#b8b2ae', false, false, true);
@@ -147,6 +155,7 @@ const paintAlpha = (x: number, y: number, z: number) => {
 
 const W = 440, H = 480;
 const views: { name: string; d: THREE.Vector3; up: THREE.Vector3; c: THREE.Vector3; ext: number }[] = [];
+const allViews: typeof views = [];
 for (const [name, yaw] of [['front', 0], ['3q', Math.PI / 4], ['left', -Math.PI / 2], ['back', Math.PI]] as const) {
   views.push({ name, d: new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), up: new THREE.Vector3(0, 1, 0), c: new THREE.Vector3(0, 0.66, 0), ext: 0.78 });
 }
@@ -156,16 +165,59 @@ views.push({ name: 'top', d: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0
   const pickViews = arg('--views');
   const zoom = Number(arg('--zoom', '1'));
   const cy = arg('--cy');
-  const keep = pickViews ? views.filter((v) => pickViews.split(',').includes(v.name)) : views.slice();
-  views.length = 0;
-  for (const v of keep) {
+  for (const v of views) {
     v.ext /= zoom;
     if (cy !== undefined && v.name !== 'top') v.c.y = Number(cy);
-    views.push(v);
   }
+  allViews.push(...views);
+  const keep = pickViews ? views.filter((v) => pickViews.split(',').includes(v.name)) : views.slice();
+  views.length = 0;
+  views.push(...keep);
+}
+/** Screen projection of a view: [x, y, depth] with depth larger nearer the camera. */
+function viewProj(v: (typeof views)[number]) {
+  const d = v.d.clone().normalize();
+  const r = new THREE.Vector3().crossVectors(v.up, d).normalize();
+  const u = new THREE.Vector3().crossVectors(d, r).normalize();
+  const scale = (H * 0.5) / v.ext;
+  return (x: number, y: number, z: number) => {
+    const dx = x - v.c.x, dy = y - v.c.y, dz = z - v.c.z;
+    return [W * 0.5 + (dx * r.x + dy * r.y + dz * r.z) * scale, H * 0.5 - (dx * u.x + dy * u.y + dz * u.z) * scale, dx * d.x + dy * d.y + dz * d.z];
+  };
 }
 
 const sheet = new Uint8Array(W * views.length * H * 3);
+// --ref: reference outline score (outline.ts)
+const refArg = arg('--ref');
+const ref = refArg ? loadRefSheet(refArg) : null;
+if (ref && !headLm) throw new Error('--ref needs --head (the landmarks are measured on the character head)');
+const osheet = ref ? new Uint8Array(sheet.length) : null;
+const outline: Record<string, OutlineResult> = {};
+// Landmark fit per reference view. The scale is shared: one head size for every view, measured on the views that show
+// both ears (front, back), since a profile's chin-to-ear span differs between faces and gave a wrong size on its own.
+const refFits: Record<string, { s: number; tx: number; ty: number; got: Record<string, [number, number]>; use: string[] }> = {};
+if (ref && headLm) {
+  const lmOf = (rv: (typeof ref.sheet.views)[string], n: string): [number, number] => (rv.mirror ? [rv.crop[2] - rv.landmarks[n][0], rv.landmarks[n][1]] : rv.landmarks[n]);
+  const per: Record<string, { use: string[]; got: Record<string, [number, number]>; s: number }> = {};
+  for (const v of allViews) {
+    const rv = ref.sheet.views[v.name];
+    if (!rv) continue;
+    const pr = viewProj(v);
+    const got = resolveLandmarks(Object.keys(rv.landmarks), headLm, (p) => pr(p.x, p.y, p.z));
+    const use = Object.keys(rv.landmarks).filter((n) => got[n]);
+    if (use.length < 2) continue;
+    per[v.name] = { use, got, s: fitSimilarity(use.map((n) => lmOf(rv, n)), use.map((n) => got[n])).s };
+  }
+  const wide = Object.entries(per).filter(([n]) => { const k = Object.keys(ref.sheet.views[n].landmarks); return k.some((x) => x.endsWith('L')) && k.some((x) => x.endsWith('R')); }).map(([, f]) => f.s);
+  const shared = wide.length ? wide.reduce((a, b) => a + b, 0) / wide.length : null;
+  for (const [name, f] of Object.entries(per)) {
+    const rv = ref.sheet.views[name];
+    const s = rv.ownScale || shared === null ? f.s : shared;
+    let tx = 0, ty = 0;
+    for (const n of f.use) { const p = lmOf(rv, n); tx += (f.got[n][0] - s * p[0]) / f.use.length; ty += (f.got[n][1] - s * p[1]) / f.use.length; }
+    refFits[name] = { s, tx, ty, got: f.got, use: f.use };
+  }
+}
 const bg = [32, 35, 43];
 
 function renderView(vi: number) {
@@ -178,6 +230,9 @@ function renderView(vi: number) {
   const key = r.clone().multiplyScalar(-0.45).addScaledVector(u, 0.62).addScaledVector(d, 0.64).normalize();
   const fill = r.clone().multiplyScalar(0.7).addScaledVector(u, -0.1).addScaledVector(d, 0.7).normalize();
   const zbuf = new Float32Array(W * H).fill(-1e9);
+  // what each pixel shows (0 background, 1 body, 2 hair) and the scalp paint's alpha there, for the outline score
+  const kindBuf = new Uint8Array(W * H), paintBuf = new Float32Array(W * H);
+  let curKind = 1;
   const col = new Float32Array(W * H * 3);
   for (let i = 0; i < W * H; i++) { col[i * 3] = bg[0] / 255; col[i * 3 + 1] = bg[1] / 255; col[i * 3 + 2] = bg[2] / 255; }
   const proj = (x: number, y: number, z: number) => {
@@ -218,11 +273,13 @@ function renderView(vi: number) {
           tone = (0.72 + 0.28 * groove) * (0.85 + 0.3 * hs);
         }
         zbuf[idx] = z;
+        kindBuf[idx] = curKind; paintBuf[idx] = 0;
         if (wp && skin) {
           // c holds the lighting factor; blend skin and painted hair per pixel
           const k = w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0];
           const lx = w0 * wp[0][0] + w1 * wp[1][0] + w2 * wp[2][0], ly = w0 * wp[0][1] + w1 * wp[1][1] + w2 * wp[2][1] - 0.44, lz = w0 * wp[0][2] + w1 * wp[1][2] + w2 * wp[2][2];
           const al = paintAlpha(lx, ly, lz);
+          paintBuf[idx] = al;
           let st = 1;
           if (al > 0) {
             const sa = scalpAngles(lx, ly, lz); st = 0.82 + 0.36 * paintStreak(sa.az, sa.phi);
@@ -273,7 +330,10 @@ function renderView(vi: number) {
           const k = shadeBody(nor[o], nor[o + 1], nor[o + 2], WHITE, !!m.flat)[0];
           c.push([k, k, k]);
         }
+        // (a back face, like the inside of the skull seen through the eye holes, is not counted as painted hair)
+        curKind = (nor[i] + nor[i + 3] + nor[i + 6]) * d.x + (nor[i + 1] + nor[i + 4] + nor[i + 7]) * d.y + (nor[i + 2] + nor[i + 5] + nor[i + 8]) * d.z < 0 ? 3 : 1;
         tri(p, c, wp, [m.color.r, m.color.g, m.color.b]);
+        curKind = 1;
         continue;
       }
       for (let j = 0; j < 3; j++) {
@@ -345,6 +405,7 @@ function renderView(vi: number) {
       return bc * diff * aoK + s1 * spec1 * aoK + s2 * spec2 * aoK + rim * bc * 2;
     });
   }
+  curKind = 2;
   for (let i = 0; i < index.length; i += 3) {
     const a0 = index[i], a1 = index[i + 1], a2 = index[i + 2];
     const hu = card[a0] > 0.5 ? [[uv[a0 * 2], uv[a0 * 2 + 1], seeds[a0]], [uv[a1 * 2], uv[a1 * 2 + 1], seeds[a0]], [uv[a2 * 2], uv[a2 * 2 + 1], seeds[a0]]] : undefined;
@@ -367,6 +428,37 @@ function renderView(vi: number) {
       }
     }
   }
+  // outline score: rendered hair (locks, plus solid scalp paint) against the reference panel placed by its landmarks
+  const rv = ref?.sheet.views[v.name];
+  if (ref && osheet && rv && headLm) {
+    const rmask = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) rmask[i] = kindBuf[i] === 2 || (kindBuf[i] === 1 && paintBuf[i] >= 0.6) ? 1 : 0;
+    const rf = refFits[v.name];
+    if (rf) {
+      const lm = rv.landmarks, got = rf.got, use = rf.use, fit = rf;
+      const fmask = refHairMask(ref.img, rv);
+      const cmp = compareMasks(rmask, W, H, fmask, fit);
+      outline[v.name] = { iou: +cmp.iou.toFixed(3), over: +cmp.over.toFixed(3), under: +cmp.under.toFixed(3), scale: +cmp.scale.toFixed(3) };
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = y * W + x, o = (y * W * views.length + vi * W + x) * 3;
+        const r = rmask[i], f = cmp.warped[i];
+        const edge = f && (x === 0 || y === 0 || x === W - 1 || y === H - 1 || !cmp.warped[i - 1] || !cmp.warped[i + 1] || !cmp.warped[i - W] || !cmp.warped[i + W]);
+        let c = [sheet[o], sheet[o + 1], sheet[o + 2]];
+        if (r && !f) c = [c[0] * 0.45 + 255 * 0.55, c[1] * 0.45 + 40 * 0.55, c[2] * 0.45 + 40 * 0.55];
+        else if (f && !r) c = [c[0] * 0.45 + 40 * 0.55, c[1] * 0.45 + 90 * 0.55, c[2] * 0.45 + 255 * 0.55];
+        if (edge) c = [0, 255, 255];
+        osheet[o] = c[0]; osheet[o + 1] = c[1]; osheet[o + 2] = c[2];
+      }
+      // landmarks: yellow = the head's, magenta = the reference's after the fit
+      const dot = (q: number[], col: number[]) => { for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = Math.round(q[0]) + dx, y = Math.round(q[1]) + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue; const o = (y * W * views.length + vi * W + x) * 3; osheet[o] = col[0]; osheet[o + 1] = col[1]; osheet[o + 2] = col[2]; } };
+      for (const n of use) {
+        dot(got[n], [255, 230, 0]);
+        const p = rv.mirror ? [rv.crop[2] - lm[n][0], lm[n][1]] : lm[n];
+        dot([p[0] * fit.s + fit.tx, p[1] * fit.s + fit.ty], [255, 0, 255]);
+      }
+    }
+  }
+  if (osheet && !outline[v.name]) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const o = (y * W * views.length + vi * W + x) * 3; osheet[o] = sheet[o]; osheet[o + 1] = sheet[o + 1]; osheet[o + 2] = sheet[o + 2]; }
 }
 views.forEach((_, i) => renderView(i));
 
@@ -388,14 +480,20 @@ const chunk = (type: string, data: Uint8Array) => {
   return Buffer.concat([len, td, crc]);
 };
 const SW = W * views.length;
-const raw = Buffer.alloc((SW * 3 + 1) * H);
-for (let y = 0; y < H; y++) {
-  raw[y * (SW * 3 + 1)] = 0;
-  Buffer.from(sheet.buffer, y * SW * 3, SW * 3).copy(raw, y * (SW * 3 + 1) + 1);
-}
-const ihdr = Buffer.alloc(13);
-ihdr.writeUInt32BE(SW, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-fs.writeFileSync(outPath, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', new Uint8Array(0))]));
+const writePng = (file: string, px: Uint8Array) => {
+  const raw = Buffer.alloc((SW * 3 + 1) * H);
+  for (let y = 0; y < H; y++) {
+    raw[y * (SW * 3 + 1)] = 0;
+    Buffer.from(px.buffer, y * SW * 3, SW * 3).copy(raw, y * (SW * 3 + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(SW, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', new Uint8Array(0))]));
+};
+writePng(outPath, sheet);
+const outlinePath = outPath.replace(/\.png$/i, '') + '_outline.png';
+if (osheet) writePng(outlinePath, osheet);
+const ov = Object.values(outline);
 
 const pick = (k: string) => (typeof audit[k] === 'number' ? Number(audit[k].toFixed(2)) : audit[k]);
 console.log(JSON.stringify({
@@ -403,4 +501,5 @@ console.log(JSON.stringify({
   locks: hair.locks.length, triangles: (geo.index!.count / 3) | 0,
   scalpCoveragePct: pick('scalpCoveragePct'), floatingRootCount: pick('floatingRootCount'), penetratingNodes: pick('penetratingNodes'),
   crownHookCount: pick('crownHookCount'), interLockClipPct: pick('interLockClipPct'), score: pick('score'), verdict: audit.verdict,
+  ...(osheet ? { outline, outlineScore: ov.length ? Math.round((100 * ov.reduce((a, o) => a + o.iou, 0)) / ov.length) : null, outlineImage: outlinePath } : {}),
 }));
