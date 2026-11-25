@@ -1,0 +1,10 @@
+{
+  "image": "undercut-fade_views.png",
+  "note": "Game (stylised) column of the undercut-fade reference sheet, the target look. Landmarks are crop pixels in the unmirrored panel, placed by eye at 5x zoom. The 3/4 and profile panels face the other way from the render, so they are mirrored.",
+  "views": {
+    "front": { "crop": [97, 0, 97, 207], "hairLumMax": 105, "landmarks": { "chin": [52.4, 133.6], "earTopL": [20, 85], "earTopR": [86, 85], "earLobeL": [23.6, 106], "earLobeR": [82.4, 106] } },
+    "3q": { "crop": [97, 207, 97, 207], "mirror": true, "hairLumMax": 105, "landmarks": { "chin": [61, 133.6], "earTop": [18, 85], "earLobe": [23, 105] } },
+    "left": { "crop": [97, 414, 97, 207], "mirror": true, "hairLumMax": 105, "landmarks": { "chin": [16, 133], "earTop": [60, 84], "earLobe": [59, 107] } },
+    "back": { "crop": [97, 621, 97, 207], "hairLumMax": 105, "landmarks": { "earTopL": [9, 85], "earTopR": [76, 85], "earLobeL": [12, 107], "earLobeR": [73, 107] }, "hairRowsBelowLobe": 0.7 }
+  }
+}

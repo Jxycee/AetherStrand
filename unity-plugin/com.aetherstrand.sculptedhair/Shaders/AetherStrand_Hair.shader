@@ -214,7 +214,7 @@ Shader "AetherStrand/SculptedHair_URP"
                 float3 normalOS   : NORMAL;
                 float4 tangentOS  : TANGENT;
                 float2 uv         : TEXCOORD0;
-                float2 uv1        : TEXCOORD1; // x = scalpRoot
+                float2 uv1        : TEXCOORD1; // x = scalpRoot, y = colour gradient coordinate + 1 (0 = use uv.y)
                 float4 color      : COLOR; // R=RootToTipV, G=LayerAO, B=StrandSeed, A=TipAlphaClipMask
             };
 
@@ -229,6 +229,7 @@ Shader "AetherStrand/SculptedHair_URP"
                 float4 vertColor   : TEXCOORD5;
                 float  fogFactor   : TEXCOORD6;
                 float  scalpRoot   : TEXCOORD7;
+                float  gradT       : TEXCOORD8; // < 0: use uv.y
             };
 
             float3 AS_ShiftTangent(float3 T, float3 N, float shift)
@@ -275,6 +276,7 @@ Shader "AetherStrand/SculptedHair_URP"
                 output.vertColor   = input.color;
                 output.fogFactor   = ComputeFogFactor(posInputs.positionCS.z);
                 output.scalpRoot   = input.uv1.x;
+                output.gradT       = input.uv1.y > 0.5 ? input.uv1.y - 1.0 : -1.0;
                 return output;
             }
 
@@ -326,10 +328,12 @@ Shader "AetherStrand/SculptedHair_URP"
                 float3 perturbedN = normalize(baseN + B * normalTex.x * (0.32 * _GrooveDepth) + T * normalTex.y * 0.05);
                 float3 V = GetWorldSpaceNormalizeViewDir(input.positionWS);
 
+                // colour gradient coordinate (web aGradT): uv.y unless the lock shows only part of the gradient (colorRange)
+                float gt = input.gradT >= 0.0 ? saturate(input.gradT) : t;
                 float3 effRoot = lerp(_BaseColor.rgb, _RootColor.rgb, scalpRoot);
-                float3 gradColor = t < 0.28
-                    ? lerp(effRoot, _BaseColor.rgb, smoothstep(0.0, 0.28, t))
-                    : lerp(_BaseColor.rgb, _TipColor.rgb, smoothstep(0.28, 1.0, t));
+                float3 gradColor = gt < 0.28
+                    ? lerp(effRoot, _BaseColor.rgb, smoothstep(0.0, 0.28, gt))
+                    : lerp(_BaseColor.rgb, _TipColor.rgb, smoothstep(0.28, 1.0, gt));
 
                 float fiberTone = (flowId.r - 0.5) * 0.92 + (seed - 0.5) * 0.32;
                 float3 albedo = clamp(gradColor * (1.0 + fiberTone * _StrandVariation), 0.0, 1.2);
@@ -394,7 +398,9 @@ Shader "AetherStrand/SculptedHair_URP"
 
                 float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
                 float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
-                float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * lerp(0.62, 1.0, layerAOv) * lerp(1.0, 0.35, fadeMask);
+                // (no highlight on a root at the skin; a lock with a light root (scalpRoot < 0.5) lies on other hair and keeps
+                // its highlight to the root, so a root left uncovered at a crop's edge isn't a dark dash, as the web)
+                float specMask = lerp(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, scalpRoot)) * (0.24 + 0.76 * fiberCrest) * microGlint * lerp(0.62, 1.0, layerAOv) * lerp(1.0, 0.35, fadeMask);
                 float keyFacing  = smoothstep(-0.14, 0.48, dot(baseN, LKey));
                 float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 

@@ -7,7 +7,8 @@ namespace AetherStrand.Editor
 {
     /// <summary>
     /// One-call import of an AetherStrand WEB export (PresetGeometry.json + recipe/ExportedLook.json) onto any rigged character.
-    /// Fits the web hair to the character's head (AetherStrandHeadFit), builds the mesh and material, and sets up physics.
+    /// Fits the web hair to the character's head (AetherStrandHeadFit), builds the mesh and material, sets up physics and builds the
+    /// scalp paint layer (AetherStrandScalpPaint) when the export carries one.
     /// Pipeline: web recipe -> tools/web_export.ts (PresetGeometry.json) -> this importer. See Reference/sessions/aetherstrand-combo/PIPELINE.md.
     /// </summary>
     public static class AetherStrandWebImport
@@ -38,6 +39,7 @@ namespace AetherStrand.Editor
             if (smr == null) return null;
 
             AetherStrandSetupWindow.AutoSetupPhysics(character, "Hair_", recipeJson, 0f, smr);
+            AetherStrandScalpPaint.Build(character, presetGeometryJson, mat, outputFolder, baseName);
             EditorUtility.SetDirty(character);
             return smr;
         }
@@ -81,6 +83,7 @@ namespace AetherStrand.Editor
             hair.material = mat;
             var drv = go.AddComponent<AetherStrandHeadCenterDriver>();
             drv.headBone = head; drv.localCenter = AetherStrandHeadFit.Apply(fit, AetherStrandHeadFit.WebHeadCenter);
+            AetherStrandScalpPaint.Build(character, geoAsset, mat, outputFolder, baseName);
             EditorUtility.SetDirty(character);
             Debug.Log("[AetherStrand] ApplyLive: fit " + fit.scale.ToString("F3") + " unitScale " + hair.unitScale.ToString("F3"));
             return hair;

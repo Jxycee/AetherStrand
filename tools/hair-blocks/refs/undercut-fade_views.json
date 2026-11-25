@@ -1,0 +1,10 @@
+{
+  "image": "undercut-fade_views.png",
+  "note": "Realistic column of the undercut-fade reference sheet. Landmarks are crop pixels, placed by eye at 4x zoom.",
+  "views": {
+    "front": { "crop": [0, 0, 97, 207], "landmarks": { "chin": [50, 140], "earTopL": [15.5, 90.5], "earTopR": [81, 90.5], "earLobeL": [17.5, 110], "earLobeR": [81, 110] } },
+    "3q": { "crop": [0, 207, 97, 207], "landmarks": { "chin": [33, 141], "earTop": [75.5, 90], "earLobe": [73, 112.5] } },
+    "left": { "crop": [0, 414, 97, 207], "landmarks": { "chin": [76, 139], "earTop": [32, 90.5], "earLobe": [36, 114] } },
+    "back": { "crop": [0, 621, 97, 207], "landmarks": { "earTopL": [13.5, 92], "earTopR": [83, 92], "earLobeL": [18, 114], "earLobeR": [79, 114] }, "hairRowsBelowLobe": 0.6 }
+  }
+}

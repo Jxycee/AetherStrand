@@ -95,6 +95,7 @@ const VERTEX_SHADER = /* glsl */ `
   attribute float aCardMask;
   attribute float aClearance;
   attribute float aScalpRoot;
+  attribute float aGradT;
   attribute float aInstability;
 
   varying vec2 vUv;
@@ -107,6 +108,7 @@ const VERTEX_SHADER = /* glsl */ `
   varying float vCardMask;
   varying float vClearance;
   varying float vScalpRoot;
+  varying float vGradT;
   varying float vInstability;
 
   void main() {
@@ -116,6 +118,7 @@ const VERTEX_SHADER = /* glsl */ `
     vCardMask = aCardMask;
     vClearance = aClearance;
     vScalpRoot = aScalpRoot;
+    vGradT = aGradT;
     vInstability = aInstability;
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -184,6 +187,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   varying float vCardMask;
   varying float vClearance;
   varying float vScalpRoot;
+  varying float vGradT;
   varying float vInstability;
 
   vec3 shiftTangent(vec3 T, vec3 N, float shift) {
@@ -331,10 +335,12 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     // Smooth 3-Stop Root -> Base -> Tip Gradient:
     // Full dark root shadow only on true scalp/hairline roots (vScalpRoot = 1.0); shingled mid-back tiers blend seamlessly!
+    // the colour gradient runs on aGradT (= uv.y unless the lock shows only part of it: LockBuildSpec.colorRange)
+    float gt = clamp(vGradT, 0.0, 1.0);
     vec3 effRootColor = mix(uBaseColor, uRootColor, vScalpRoot);
-    vec3 gradColor = t < 0.28
-      ? mix(effRootColor, uBaseColor, smoothstep(0.0, 0.28, t))
-      : mix(uBaseColor, uTipColor, smoothstep(0.28, 1.0, t));
+    vec3 gradColor = gt < 0.28
+      ? mix(effRootColor, uBaseColor, smoothstep(0.0, 0.28, gt))
+      : mix(uBaseColor, uTipColor, smoothstep(0.28, 1.0, gt));
 
     // Natural multi-filament tonal variation
     float fiberTone = (flowId.r - 0.5) * 0.92 + (vStrandSeed - 0.5) * 0.32;
@@ -386,7 +392,9 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
     float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
-    float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
+    // (no highlight on a root at the skin; a lock with a light root (scalpRoot < 0.5) lies on other hair and keeps its
+    // highlight to the root, so a root left uncovered at a crop's edge isn't a dark dash)
+    float specMask = mix(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, vScalpRoot)) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
     float keyFacing = smoothstep(-0.14, 0.48, dot(baseN, LKey));
     float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 

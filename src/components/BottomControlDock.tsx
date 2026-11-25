@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { HairShellEditor } from './HairShellEditor';
 import {
   Camera,
   Check,
@@ -21,6 +22,7 @@ import {
   DEFAULT_BUILDER_BY_PRESET,
   HAIR_PRESETS,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -38,6 +40,9 @@ interface BottomControlDockProps {
   presetId: HairPresetId;
   onSelectPreset: (id: HairPresetId) => void;
   builderConfig: HairBuilderConfig | null;
+  /** The builder config as the hair is built (with the loaded head's ears), for the shape shell editor. */
+  buildConfig?: HairBuilderConfig | null;
+  onShellPreview?: (shell: HairShellGrid | null) => void;
   customStyleName: string | null;
   onChangeBuilder: (patch: Partial<HairBuilderConfig>) => void;
   onRandomizeStyle: () => void;
@@ -133,6 +138,8 @@ export function BottomControlDock({
   presetId,
   onSelectPreset,
   builderConfig,
+  buildConfig,
+  onShellPreview,
   customStyleName,
   onChangeBuilder,
   onRandomizeStyle,
@@ -169,6 +176,8 @@ export function BottomControlDock({
   const [showImportBox, setShowImportBox] = useState(false);
   const [importDraft, setImportDraft] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  const [shellOpen, setShellOpen] = useState(false);
+  const noPreview = useCallback(() => {}, []);
 
   const activeBuilder: HairBuilderConfig = builderConfig ?? DEFAULT_BUILDER_BY_PRESET[presetId];
 
@@ -525,6 +534,73 @@ export function BottomControlDock({
                   unit="x"
                   onChange={(strandWidth) => onChangeBuilder({ strandWidth })}
                 />
+                <SliderRow
+                  label="Hairline Softness"
+                  value={activeBuilder.hairlineSoftness ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineSoftness) => onChangeBuilder({ hairlineSoftness })}
+                />
+                <SliderRow
+                  label="Hairline Unevenness"
+                  value={activeBuilder.hairlineIrregularity ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineIrregularity) => onChangeBuilder({ hairlineIrregularity })}
+                />
+                <SliderRow
+                  label="Fade Height"
+                  value={activeBuilder.fadeHeight ?? 0.4}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeHeight) => onChangeBuilder({ fadeHeight })}
+                />
+                <SliderRow
+                  label="Fade Blend"
+                  value={activeBuilder.fadeBlend ?? 0.75}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeBlend) => onChangeBuilder({ fadeBlend })}
+                />
+                <div className="flex flex-col gap-1">
+                  <ColorSwatchInput
+                    label={activeBuilder.scalpColor ? 'Hairline Tint' : 'Hairline: hair colour'}
+                    value={activeBuilder.scalpColor ?? '#3a2a20'}
+                    onChange={(scalpColor) => onChangeBuilder({ scalpColor })}
+                  />
+                  {activeBuilder.scalpColor && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeBuilder({ scalpColor: undefined })}
+                      className="text-[11px] text-slate-400 hover:text-slate-200 text-left cursor-pointer"
+                    >
+                      Match hair colour
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Shape shell: the outer shape as an editable thickness grid (hairShell.ts) */}
+              <div className="pt-2 border-t border-white/8">
+                <button
+                  type="button"
+                  onClick={() => setShellOpen((o) => !o)}
+                  aria-expanded={shellOpen}
+                  className="text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  {shellOpen ? 'Hide shape shell' : `Shape shell${activeBuilder.shell ? ' (on)' : ''}: edit the outer shape`}
+                </button>
+                {shellOpen && (
+                  <HairShellEditor
+                    config={buildConfig ?? activeBuilder}
+                    onChange={(shell) => onChangeBuilder({ shell })}
+                    onPreview={onShellPreview ?? noPreview}
+                  />
+                )}
               </div>
 
               {/* Row 3: Procedural Generator & Live Sculpt Status */}

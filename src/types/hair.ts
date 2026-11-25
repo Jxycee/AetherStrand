@@ -50,6 +50,22 @@ export type HairBuilderArchetype =
   | 'rope-locs'
   | 'coily-afro';
 
+/**
+ * The outer shape of a hairstyle as a thickness grid over the scalp (see hairShell.ts). Plain JSON: an AI or a person can
+ * read and edit it directly. mm[row][col] is the target height of the hair surface above the scalp in scene mm at
+ * phiDeg[row] (degrees down from the crown: 0 top, ~95 temples, ~125 ear lobe, ~135 nape) and azDeg[col] (degrees around
+ * from the front: 0 forehead, 90 over the ear, 180 back). null leaves that cell as built.
+ */
+export interface HairShellGrid {
+  azDeg: number[];
+  phiDeg: number[];
+  mm: (number | null)[][];
+  /** 0..1: how far the hair moves to the shell (default 1). */
+  strength?: number;
+  /** Default true: one grid for both sides (azDeg 0..180). false: azDeg runs -180..180, positive = the +x side (the character's left). */
+  mirror?: boolean;
+}
+
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;
   partPosition: number; // -1 (deep left) to +1 (deep right), 0 = center
@@ -63,6 +79,34 @@ export interface HairBuilderConfig {
   density: number;      // 0.65 to 1.25
   strandWidth: number;  // 0.75 to 1.25
   seed: number;
+  /**
+   * Optional, 0 to 1: how far up the sides a painted fade climbs (0 = a tight band at the cut line, 1 = up to where the
+   * top hair starts). Used by styles with a painted fade (see fadeScalpPaint in hairBuilder.ts). Default 0.4.
+   */
+  fadeHeight?: number;
+  /** 0..1: fade blend width (fadeScalpPaint `blend`): longer, smoother gradient into the short sides. Default per style. */
+  fadeBlend?: number;
+  /**
+   * Optional, 0 to 1: how softly the painted hairline (and any fade edge) blends into the skin, every style.
+   * 0 = crisp barbered edge, 1 = very soft and wispy. Default 0.5. See applyHairlineLook in scalpPaint.ts.
+   */
+  hairlineSoftness?: number;
+  /** Optional, 0 to 1: unevenness of the painted hairline edge (0 = a clean drawn curve). Default 0.5. */
+  hairlineIrregularity?: number;
+  /**
+   * Optional '#rrggbb': colour of the painted hair at the hairline, fade and sideburns. Leave unset to match the hair's
+   * own colour (root-to-base tone); set it to tint the hairline differently (e.g. greyer temples).
+   */
+  scalpColor?: string;
+  /**
+   * Optional: where the ears are on the head the hair is built for, in web scalp coordinates (theta = |azimuth| from the
+   * front, phi = polar angle from the crown). Sideburns, the arch over the ear, fades and nape lines follow it. The web app
+   * fills it from a loaded character head (measureHeadLandmarks in characterHead.ts); without it the builder uses its
+   * defaults (Tobin's head). Carried in recipes, so an export is built for the same ears it was previewed on.
+   */
+  earLandmarks?: { earFrontTheta: number; earBackTheta: number; earCenterTheta: number; earTopPhi: number; earMidPhi: number; earLobePhi: number; napePhi?: number };
+  /** Optional outer-shape grid (hairShell.ts): moves the built locks in or out so the hair surface meets it. */
+  shell?: HairShellGrid;
 }
 
 export interface ShaderConfig {

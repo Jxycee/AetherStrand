@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { applyHairShell } from './hairShell';
+import { applyHairlineLook, binAzimuth, deriveScalpPaint, makeScalpPaint, sampleArr, ScalpPaint } from './scalpPaint';
 import {
   HairBuilderArchetype,
   HairBuilderConfig,
@@ -34,6 +36,36 @@ export interface LockBuildSpec {
   ripple?: number;
   /** Bumps along the lock for ripple (default 9). */
   rippleFreq?: number;
+  /**
+   * [from, to] in 0..1: the part of the root -> base -> tip colour gradient this lock shows (default [0, 1]). A short lock
+   * in a cropped field is a piece of longer hair, so [0.1, 0.65] keeps every tip from lighting up and dotting the surface.
+   */
+  colorRange?: [number, number];
+  /**
+   * Close-cut hair: keeps this exact shape and follows the head rigidly (no rest-pose bake, no live physics). Use for short,
+   * densely layered hair (crops, fades); the bake pushes overlapping locks apart and crumples them into knots and flakes.
+   */
+  rigid?: boolean;
+  /**
+   * 0..1: highlights follow the hair surface over the scalp instead of each lock's own rise off it. Short locks rise from
+   * the skin and lie down again, so their own tangent catches the light at one point each and dots the top with a
+   * highlight dash per lock. At 1 the shading tangent is the lock's direction along the scalp only, so neighbouring
+   * locks shine together in broad bands. Only the highlight changes, never the shape.
+   */
+  surfaceShine?: number;
+  /**
+   * Head-local direction the highlight follows (with surfaceShine): the shading tangent leans to it by surfaceShine.
+   * Give neighbouring locks the comb direction at their roots, so they shine together even where each lock bends or
+   * gathers onto a clump on its own. Unset: the lock's own root-to-tip direction. Only the highlight changes.
+   */
+  shadeDir?: THREE.Vector3;
+  /**
+   * 0.05..1: width of the root end as a fraction of the lock's width (default by scalpRoot: 0.36, or 0.08 below 0.5). The
+   * root widens to full over the first quarter of the lock, so a narrow root is a rounded or pointed end; seen face on
+   * at a hairline, a row of those reads as hanging bangs. Near 1 the lock is full width from the root, and with the root
+   * sunk in the scalp it grows out of the skin along one clean line.
+   */
+  rootWidth?: number;
 }
 
 export interface CuratedHairPalette {
@@ -114,15 +146,31 @@ function skullSurfacePoint(theta: number, phi: number, lift = 0): THREE.Vector3 
 }
 
 // ---- Shared ear-aligned cut line (SHARED FIX 1) ----
-// Tobin ear landmarks in web scalp coords (theta = |azimuth| from front, phi from crown apex), measured 2026-11-24 from
-// TobinBase head-bone points (fit scale 0.333/0.341/0.354, offset -0.0007/-0.0656/0.0414, x mirrored):
-// ear spans theta 1.62..1.94 (centre 1.78), top phi ~1.64, tragus/mid phi ~1.86, lobe bottom phi ~2.10.
-export const EAR_FRONT_THETA = 1.62;
-export const EAR_BACK_THETA = 1.94;
-export const EAR_CENTER_THETA = 1.78;
-export const EAR_TOP_PHI = 1.64;
-export const EAR_MID_PHI = 1.86;
-export const EAR_LOBE_PHI = 2.10;
+// Ear landmarks in web scalp coords (theta = |azimuth| from front, phi from crown apex). They are live values: each build
+// sets them from config.earLandmarks (the loaded character head's measured ears, measureHeadLandmarks in
+// characterHead.ts), or the defaults, so every cut line, sideburn and fade follows the ears of the head the hair is for.
+// Defaults: Tobin_Head.obj measured 2026-11-24 with the pinna detector (an earlier hand measurement put the ear about
+// 0.2 rad too far back, which put sideburns on the ear and pulled the temple corners back).
+export const DEFAULT_EAR_LANDMARKS = { earFrontTheta: 1.43, earBackTheta: 1.78, earCenterTheta: 1.66, earTopPhi: 1.68, earMidPhi: 1.94, earLobePhi: 2.16 };
+export let EAR_FRONT_THETA = DEFAULT_EAR_LANDMARKS.earFrontTheta;
+export let EAR_BACK_THETA = DEFAULT_EAR_LANDMARKS.earBackTheta;
+export let EAR_CENTER_THETA = DEFAULT_EAR_LANDMARKS.earCenterTheta;
+export let EAR_TOP_PHI = DEFAULT_EAR_LANDMARKS.earTopPhi;
+export let EAR_MID_PHI = DEFAULT_EAR_LANDMARKS.earMidPhi;
+export let EAR_LOBE_PHI = DEFAULT_EAR_LANDMARKS.earLobePhi;
+
+/** Sets the ears every cut line uses (call before building; undefined restores the defaults). */
+export function setEarLandmarks(l?: HairBuilderConfig['earLandmarks'] | null): void {
+  const d = DEFAULT_EAR_LANDMARKS;
+  const ok = (v: unknown, lo: number, hi: number) => typeof v === 'number' && isFinite(v) && v > lo && v < hi;
+  const use = !!l && ok(l.earFrontTheta, 1, 2.4) && ok(l.earBackTheta, 1, 2.6) && ok(l.earTopPhi, 1.2, 2.4) && ok(l.earLobePhi, 1.5, 2.8) && l.earBackTheta > l.earFrontTheta && l.earLobePhi > l.earTopPhi;
+  EAR_FRONT_THETA = use ? l!.earFrontTheta : d.earFrontTheta;
+  EAR_BACK_THETA = use ? l!.earBackTheta : d.earBackTheta;
+  EAR_CENTER_THETA = use && ok(l!.earCenterTheta, 1, 2.6) ? l!.earCenterTheta : (EAR_FRONT_THETA + EAR_BACK_THETA) / 2;
+  EAR_TOP_PHI = use ? l!.earTopPhi : d.earTopPhi;
+  EAR_LOBE_PHI = use ? l!.earLobePhi : d.earLobePhi;
+  EAR_MID_PHI = use && ok(l!.earMidPhi, 1.3, 2.7) ? l!.earMidPhi : (EAR_TOP_PHI + EAR_LOBE_PHI) / 2;
+}
 
 export interface EarCutOptions {
   /** 0..1: sideburn tip from just above the ear top (0) to the lobe bottom (1). Default 0.6 (below mid-ear). May exceed 1 (fade caps dissolve before their nominal end). */
@@ -131,6 +179,9 @@ export interface EarCutOptions {
   sideburnGap?: number;
   /** Azimuth span (rad) of the pointed descent from the temple to the sideburn tip. Default 0.40. */
   sideburnTaper?: number;
+  /** Shape of that descent: above 1 the hairline holds and drops late (a long diagonal over the temple), below 1 it drops
+   * early and runs down in front of the ear (temple covered, near-vertical sideburn edge). Default 1.8. */
+  sideburnCurve?: number;
   /** phi clearance kept above the ear top by the arch. Default 0.07. */
   earClearance?: number;
   /** phi of the cut at the nape centre (theta = pi). Default 2.10. */
@@ -171,7 +222,7 @@ export function earAlignedCutPhi(theta: number, o: EarCutOptions = {}): number {
   const rise = 0.07;
   const eb = EAR_BACK_THETA + 0.03;
   if (a <= a0) return temple(a);
-  if (a <= tip.theta) return THREE.MathUtils.lerp(temple(a0), tip.phi, Math.pow((a - a0) / taper, 1.8));
+  if (a <= tip.theta) return THREE.MathUtils.lerp(temple(a0), tip.phi, Math.pow((a - a0) / taper, o.sideburnCurve ?? 1.8));
   if (a <= tip.theta + rise) return THREE.MathUtils.lerp(tip.phi, arch(tip.theta + rise), _ss((a - tip.theta) / rise));
   if (a <= eb) return arch(a);
   const behind = o.behindEarPhi ?? arch(eb) + 0.10;
@@ -197,6 +248,1061 @@ export function sideburnLocks(specs: LockBuildSpec[], o: EarCutOptions & { count
       specs.push({ pointsLocal: pts, width: (o.width ?? 0.022) * (0.7 + 0.3 * u), thickness: 0.006, stiffnessBias: 0.97, layerAO: 0.9, layerOrder: o.layerOrder ?? 3, isFadeCap: o.isFadeCap, lockNormal: false, scalpRoot: 0.4 });
     }
   }
+}
+
+// ---- Shared textured top (short crops, undercuts, fades) ----
+/** Point on the scalp dome from its top-down projection (x, z in head-pivot space) lifted by `lift`; the projection is clamped to r^2 <= maxR2. */
+export function domePoint(x: number, z: number, lift: number, maxR2 = 0.88): THREE.Vector3 {
+  const nx = x / SCALP_RX, nz = z / SCALP_RZ;
+  const r2 = nx * nx + nz * nz;
+  const k = r2 > maxR2 ? Math.sqrt(maxR2 / r2) : 1.0;
+  const cx = nx * k, cz = nz * k;
+  const cy = Math.sqrt(Math.max(0.04, 1.0 - cx * cx - cz * cz));
+  return new THREE.Vector3(HEAD_CENTER_LOCAL.x + cx * (SCALP_RX + lift), HEAD_CENTER_LOCAL.y + cy * (SCALP_RY + lift), HEAD_CENTER_LOCAL.z + cz * (SCALP_RZ + lift));
+}
+
+export interface TexturedTopOptions {
+  /** Crown whorl (x, z) the hair grows away from. Default [0.02, -0.15]. */
+  whorl?: [number, number];
+  /** -1..1: front flow swings to web -X / +X. Default 0. */
+  sweep?: number;
+  /** 0..1: how much the front half flows straight forward instead of radially from the whorl. Default 0.8. */
+  forward?: number;
+  /** Lock length (projected, head-pivot units) at the crown and at the front. Defaults 0.13 / 0.2. */
+  lenCrown?: number;
+  lenFront?: number;
+  /** 0..1 overall volume (how far the locks stand off the scalp). Default 0.5. */
+  lift?: number;
+  /** 0..1: how much the tips kick up into spikes. Default 0.5. */
+  spike?: number;
+  /** Clump spacing (projected units). Default 0.065. */
+  spacing?: number;
+  /** Root area: ellipse half-axes in x and z (projected). Defaults 0.235 / 0.275. */
+  extentX?: number;
+  extentZ?: number;
+  /** Tips stop inside this projected dome radius^2, +-0.05 per clump (keeps the top from flaring over the sides). Default 0.86. */
+  reach?: number;
+  /** Extra reach^2 at the front centre so the front edge meets the hairline. Default 0.14. */
+  frontReach?: number;
+  /** Base lock width. Default 0.028. */
+  width?: number;
+  /**
+   * 0..1: front quiff. Front clumps that flow toward the face stand off the forehead instead of following it down, so
+   * the front lifts up and forward (textured crops, fades) rather than hanging as a fringe. Default 0.
+   */
+  quiff?: number;
+  /**
+   * Drape: phi (polar angle from the crown, by signed azimuth) where clumps flowing back or sideways end. When set, those
+   * clumps follow the skull past the dome edge and lie down over the sides and back to this line, so the top layers into
+   * painted sides (fades, undercuts) instead of ending on a ledge. Clumps flowing toward the face still stop at `reach`.
+   * Unset = every clump stops at `reach` (the old behaviour).
+   */
+  endPhi?: (az: number) => number;
+  /** 0..1: extra length for draping clumps so roots near the crown can reach `endPhi`. Default 0.6. */
+  drapeLength?: number;
+  /**
+   * With `endPhi`: how far past it (rad) front clumps may run. They start at the hairline and the quiff stands them up,
+   * so a positive value lets the front edge grow from the hairline itself. Default -0.08 (stop just above it).
+   */
+  frontOver?: number;
+  /**
+   * Front hairline row: phi of the hairline by signed azimuth. When set, short locks root along it across the forehead and
+   * temples (|az| < 1.1) and rise up off the skin with their tips leaning forward, so the front edge of a crop grows from
+   * the hairline instead of leaving a bare painted strip under the top's tips.
+   */
+  hairlineRow?: (az: number) => number;
+  /**
+   * 0..1: front swept up and back. Clumps rooted near the front hairline flow back toward the crown (with the sweep) and
+   * lift off the forehead at the root, so the front reads as a hairline rising up and back with a little lift, not a
+   * fringe. 0 = every clump follows the whorl flow (fringe-like front). Default 0.
+   */
+  frontBack?: number;
+  /** Clump size: scales spacing, clump width and lock spread together. >1 = fewer, larger swept clumps. Default 1. */
+  clumpScale?: number;
+  /** Length scale of the flat swirl of short locks that covers the crown whorl (0 = none). Default 1. */
+  whorlCap?: number;
+  seed?: number;
+  wMul?: number;
+}
+
+/**
+ * Textured top: pointed clumps that grow from the crown whorl and flow forward (short crops, undercuts, fades, messy tops).
+ * Two layers: an under layer (shorter, flatter, layerOrder 2) fills the scalp; the outer layer (layerOrder 3) carries the texture.
+ * Each clump is 2-3 locks whose roots spread across the flow and whose tips converge on one point, so the surface
+ * reads as separate spikes rather than a helmet. Lengths grow from the crown to the front, lift grows toward the tips.
+ */
+export function texturedTopLocks(specs: LockBuildSpec[], o: TexturedTopOptions = {}): void {
+  let st = ((o.seed ?? 1337) >>> 0) || 1;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const [wx, wz] = o.whorl ?? [0.02, -0.15];
+  const sweep = o.sweep ?? 0, fwdK = o.forward ?? 0.8;
+  const ex = o.extentX ?? 0.235, ez = o.extentZ ?? 0.275;
+  const cS = o.clumpScale ?? 1;
+  const sp = (o.spacing ?? 0.065) * cS;
+  const frontBackK = o.frontBack ?? 0;
+  const back = new THREE.Vector2(sweep * 0.45, -1).normalize();
+  // front zone for frontBack: from about a third of the way back from the front edge of the root area to the hairline
+  const frontZone = (z: number) => _ss((z - (wz + 0.04)) / Math.max(0.05, ez * 0.75 - (wz + 0.04)));
+  // where front clumps stop: just above the hairline (hairlineRow) or the drape line, never on the forehead
+  const frontLimit = (az: number) => (o.hairlineRow ? o.hairlineRow(az) : o.endPhi ? o.endPhi(az) : 1.3) + (o.frontOver ?? -0.08);
+  const reach = o.reach ?? 0.86;
+  const lift = o.lift ?? 0.5, spike = o.spike ?? 0.5;
+  const wMul = o.wMul ?? 1;
+  const fwd = new THREE.Vector2(sweep * 0.35, 1).normalize();
+  const frontness = (z: number) => _ss((z - (wz - 0.02)) / 0.2);
+  const flow = (x: number, z: number): THREE.Vector2 => {
+    const rad = new THREE.Vector2(x - wx, z - wz);
+    const d = rad.length();
+    if (d < 1e-4) return fwd.clone();
+    rad.divideScalar(d);
+    const k = fwdK * frontness(z) * _ss(d / 0.05);
+    return rad.lerp(fwd, k).normalize();
+  };
+  // the front edge may run further down (to the hairline) than the sides, which stay inside `reach`
+  const inside = (x: number, z: number, jit = 0) => (x / SCALP_RX) ** 2 + (z / SCALP_RZ) ** 2 <= reach + jit + (o.frontReach ?? 0.14) * _ss(z / SCALP_RZ / 0.8) * Math.max(0, 1 - Math.abs(x) / 0.2);
+  for (let layer = 0; layer < 2; layer++) {
+    const s = layer === 0 ? sp : sp * 0.9;
+    for (let zc = -ez; zc <= ez; zc += s) {
+      for (let xc = -ex; xc <= ex; xc += s) {
+        const x0 = xc + (rnd() - 0.5) * s * 1.1 + (layer ? s * 0.5 : 0);
+        const z0 = zc + (rnd() - 0.5) * s * 1.1 + (layer ? s * 0.45 : 0);
+        if ((x0 / ex) ** 2 + (z0 / ez) ** 2 > 1) continue;
+        const fz = _ss((z0 + ez) / (2 * ez));
+        const outer = layer === 0;
+        let len = THREE.MathUtils.lerp(o.lenCrown ?? 0.13, o.lenFront ?? 0.2, fz) * (0.6 + 0.8 * rnd()) * (outer ? 1 : 0.7);
+        // march the clump centre line over the unit scalp ellipsoid (u = direction, |u| = 1; x = u.x * RX, z = u.z * RZ is
+        // the old top-down projection). The top-down flow is projected onto the surface, so a clump flowing out past the
+        // dome edge turns down the side or back by itself.
+        const uOf = (x: number, z: number) => { const nx = x / SCALP_RX, nz = z / SCALP_RZ; return new THREE.Vector3(nx, Math.sqrt(Math.max(0.0016, 1 - nx * nx - nz * nz)), nz).normalize(); };
+        // `down` adds a pull toward the floor: below the dome edge a level flow would project back upward, so draping clumps
+        // are pulled down the side or back instead
+        const tangentToward = (u: THREE.Vector3, dx: number, dz: number, down = 0) => {
+          const d = new THREE.Vector3(dx / SCALP_RX, 0, dz / SCALP_RZ).normalize();
+          d.y -= down;
+          d.addScaledVector(u, -d.dot(u));
+          if (d.lengthSq() < 1e-10) d.set(0, -1, 0).addScaledVector(u, u.y);
+          return d.normalize();
+        };
+        // frontBack: a clump rooted in the front zone flows back toward the crown (fixed per clump, so it doesn't turn round)
+        const fb = frontBackK * frontZone(z0);
+        const flowC = (x: number, z: number) => {
+          if (fb <= 0) return flow(x, z);
+          const f = flow(x, z).lerp(back, Math.min(1, fb * 1.3));
+          return f.lengthSq() < 1e-6 ? back.clone() : f.normalize();
+        };
+        const d0 = flowC(x0, z0);
+        const fwdness = _ss((d0.y + 0.2) / 0.9); // 1 when the clump flows toward the face, 0 when it flows back or sideways
+        const drapes = !!o.endPhi && fwdness < 0.5 && fb < 0.3;
+        if (drapes) len *= 1 + (o.drapeLength ?? 0.6) * (1 - 2 * fwdness);
+        const path: THREE.Vector3[] = [uOf(x0, z0)];
+        const jit = (rnd() - 0.5) * 0.1; // ragged edge: clumps stop at different heights
+        const steps = 8;
+        const arc = len / steps / 0.3; // step as an angle on the unit scalp (~0.3 m radius)
+        for (let k = 1; k <= steps; k++) {
+          const u = path[k - 1];
+          const d = flowC(u.x * SCALP_RX, u.z * SCALP_RZ);
+          const q = u.clone().addScaledVector(tangentToward(u, d.x, d.y, drapes ? 2.5 * _ss((0.65 - u.y) / 0.65) : 0), arc).normalize();
+          if (drapes) {
+            const az = Math.atan2(q.x, q.z), phi = Math.acos(THREE.MathUtils.clamp(q.y, -1, 1));
+            if (phi > o.endPhi!(az) + jit * 0.6) break;
+            // over the forehead a clump never drapes: it stops above the hairline like a front clump
+            if (Math.abs(az) < 0.95 && phi > frontLimit(az) + jit * 0.3) break;
+          } else if (o.endPhi) {
+            // with a drape line set, front clumps also run to just above it, so the front hair grows from the hairline
+            // (the quiff stands it up) instead of leaving a bare painted strip under the tips
+            const az = Math.atan2(q.x, q.z), phi = Math.acos(THREE.MathUtils.clamp(q.y, -1, 1));
+            if (phi > frontLimit(az) + jit * 0.3) break;
+          } else if (q.y < 0.17 || !inside(q.x * SCALP_RX, q.z * SCALP_RZ, jit)) break;
+          path.push(q);
+        }
+        // a clump cut shorter than it is wide renders as a curled blob, so drop it (the scalp paint covers there)
+        if (path.length < 3 || (path.length - 1) * arc * 0.3 < 0.04) continue;
+        const at = (t: number) => {
+          const f = t * (path.length - 1), i = Math.min(path.length - 2, Math.floor(f));
+          return path[i].clone().lerp(path[i + 1], f - i).normalize();
+        };
+        const perp2 = new THREE.Vector2(-d0.y, d0.x);
+        const nL = 2 + Math.floor(rnd() * 2);
+        // clumps flowing back lie flatter, draping ones flatter still; front clumps swept back (fb) lift off the forehead
+        const liftAmt = (0.008 + 0.035 * lift) * (0.75 + 0.5 * rnd()) * (0.55 + 0.45 * fz) * (outer ? 1 : 0.55) * Math.max(drapes ? 0.3 + 0.7 * fwdness : 0.45 + 0.55 * fwdness, 1.3 * fb);
+        const upK = Math.max(fwdness * fz, fb); // how much the lift is steered upward (front stands up, not out)
+        const surf = (u: THREE.Vector3, l: number) => new THREE.Vector3(HEAD_CENTER_LOCAL.x + u.x * (SCALP_RX + l), HEAD_CENTER_LOCAL.y + u.y * (SCALP_RY + l), HEAD_CENTER_LOCAL.z + u.z * (SCALP_RZ + l));
+        for (let k = 0; k < nL; k++) {
+          const off = (((k - (nL - 1) / 2) / Math.max(1, nL - 1)) * 0.03 + (rnd() - 0.5) * 0.006) * cS;
+          const reachT = 1 - 0.2 * Math.abs(off) / (0.015 * cS); // centre locks run furthest: pointed clump
+          const pts: THREE.Vector3[] = [];
+          // quiff: where the surface drops away in front, the lock keeps its height (stands off the forehead)
+          const qK = (o.quiff ?? 0) * fwdness * _ss((fz - 0.45) / 0.4) * (outer ? 1 : 0.6);
+          const yRoot = surf(path[0], 0).y;
+          for (let n = 0; n < NODES_PER_LOCK; n++) {
+            const t = n / (NODES_PER_LOCK - 1);
+            const c = at(t * reachT);
+            const spread = off * (1 - 0.75 * Math.pow(t, 1.5)); // tips gather but stay apart: a clump, not a cone
+            // lift rises near the root, then the lock lies along the surface (a smooth layered top, not shingles); spikes kick only at the tip
+            // where the clump flows forward the tip stays up (lift and spike); where it flows back or down the sides it settles
+            // back onto the skull, so the top melts into the sides instead of ending in a ledge
+            const settle = (1 - fwdness) * (1 - fb) * (drapes ? _ss((t - 0.2) / 0.5) : _ss((t - 0.45) / 0.55));
+            const lh = 0.006 + liftAmt * Math.sqrt(t) * (1 - 0.85 * settle) + (outer ? spike * 0.04 * Math.pow(t, 3) * (0.35 + 0.65 * fz) * Math.max(fwdness, fb) : 0);
+            // spread across the flow, kept on the surface
+            const side = tangentToward(c, perp2.x, perp2.y);
+            const u = c.clone().addScaledVector(side, spread / 0.3).normalize();
+            const base = surf(u, 0);
+            // lift goes along the scalp normal, but toward the front it is steered upward so the front stands up, not out
+            const dir = surf(u, 1).sub(base).normalize().lerp(new THREE.Vector3(0, 1, 0), 0.65 * upK).normalize();
+            const p = base.clone().addScaledVector(dir, lh);
+            // quiff: give back the height the forehead drops away, plus a little rise, so the front stands up rather than out
+            if (qK > 0) p.y += qK * (Math.max(0, yRoot - base.y) * 0.9 + 0.012 * Math.sin(Math.PI * Math.min(1, t * 1.2)));
+            pts.push(p);
+          }
+          specs.push({
+            pointsLocal: pts, width: ((o.width ?? 0.028) + rnd() * 0.01) * cS * wMul * (outer ? 1 : 1.3), thickness: 0.006,
+            // draping clumps taper over a longer tip so the top thins out into the painted sides instead of ending on a ledge
+            stiffnessBias: 0.96, layerAO: outer ? 0.8 + rnd() * 0.2 : 0.7, layerOrder: outer ? 3 : 2, smooth: 2, tipStart: drapes ? 0.4 : 0.62,
+            lockNormal: false, scalpRoot: 0.55,
+          });
+        }
+      }
+    }
+  }
+  // front hairline row: pointed clumps rising off the hairline (see hairlineRow). Each clump is 2-3 locks rooted side by
+  // side along the hairline whose tips gather to a point, with strongly varied heights, so the front edge reads as hair
+  // rising in spikes from a natural hairline rather than an even band of strands.
+  if (o.hairlineRow) {
+    const azMax = 1.1, step = 0.085 * cS;
+    for (let azc = -azMax; azc <= azMax + 1e-6; azc += step * (0.8 + 0.4 * rnd())) {
+      const edge = 1 - _ss((Math.abs(azc) - 0.55) / 0.55); // shorter and flatter toward the temples
+      const L = (0.04 + 0.06 * rnd()) * (0.55 + 0.45 * edge);
+      const rise = (0.014 + 0.024 * lift) * (0.45 + 0.55 * edge) * (0.5 + 0.9 * rnd());
+      const tipAz = azc + sweep * 0.1 + (rnd() - 0.5) * 0.04;
+      const nL = 2 + Math.floor(rnd() * 2);
+      for (let k = 0; k < nL; k++) {
+        const fk = nL === 1 ? 0 : k / (nL - 1) - 0.5;
+        const az0 = azc + fk * step * 0.9;
+        const ph0 = o.hairlineRow(az0) - 0.008 - rnd() * 0.02;
+        const pts: THREE.Vector3[] = [];
+        for (let n = 0; n < NODES_PER_LOCK; n++) {
+          const t = n / (NODES_PER_LOCK - 1);
+          // up the head along the surface, lifting off it, tips gathering on the clump's tip azimuth
+          const ph = ph0 - (L / 0.3) * t;
+          const a = THREE.MathUtils.lerp(az0, tipAz, Math.pow(t, 1.4));
+          const base = skullSurfacePoint(a, ph, 0);
+          const nrm = skullSurfacePoint(a, ph, 1).sub(base).normalize();
+          const up = nrm.clone().lerp(new THREE.Vector3(0, 1, 0), 0.4 * edge).normalize();
+          const p = base.addScaledVector(up, 0.004 + rise * Math.sin(Math.PI * 0.5 * Math.min(1, t * 1.2)));
+          p.z += 0.01 * edge * Math.pow(t, 2) * (1 - frontBackK); // swept-back fronts don't lean forward
+          pts.push(p);
+        }
+        specs.push({
+          pointsLocal: pts, width: (0.022 + rnd() * 0.008) * cS * wMul, thickness: 0.005, stiffnessBias: 0.97, layerAO: 0.9 + rnd() * 0.1,
+          layerOrder: 3, smooth: 2, tipStart: 0.45, lockNormal: false, scalpRoot: 0.6,
+        });
+      }
+    }
+  }
+  // whorl cap: short locks lying flat in a small swirl over the whorl, so the crown doesn't open into a bald spot where
+  // every clump grows away from the same point
+  {
+    const nCap = 9, swirl = 0.6;
+    for (let i = 0; i < nCap; i++) {
+      const a = (i / nCap) * Math.PI * 2 + rnd() * 0.4;
+      const r0 = 0.004 + rnd() * 0.01;
+      const x0 = wx + Math.sin(a) * r0, z0 = wz + Math.cos(a) * r0;
+      const dx = Math.sin(a + swirl), dz = Math.cos(a + swirl);
+      const L = (0.045 + rnd() * 0.025) * (o.whorlCap ?? 1);
+      if (L <= 0.005) break;
+      const pts: THREE.Vector3[] = [];
+      for (let n = 0; n < NODES_PER_LOCK; n++) {
+        const t = n / (NODES_PER_LOCK - 1);
+        // curve the lock round the whorl as it goes out
+        const bend = swirl * 0.8 * t;
+        const cx = x0 + (dx * Math.cos(bend) + dz * Math.sin(bend)) * L * t, cz = z0 + (dz * Math.cos(bend) - dx * Math.sin(bend)) * L * t;
+        pts.push(domePoint(cx, cz, 0.006 + 0.004 * Math.sin(Math.PI * t), 0.97));
+      }
+      specs.push({
+        pointsLocal: pts, width: 0.024 * wMul, thickness: 0.005, stiffnessBias: 0.97, layerAO: 0.85, layerOrder: 3, smooth: 2,
+        tipStart: 0.55, lockNormal: false, scalpRoot: 0.6,
+      });
+    }
+  }
+}
+
+export interface CropFieldOptions {
+  /** phi (polar angle from the crown) by signed azimuth where the modelled hair ends: the painted hairline / top of the fade. */
+  hairPhi: (az: number) => number;
+  /** How far past `hairPhi` (rad) roots may sit, so the locks overlap the solid paint instead of leaving a seam. Default 0.03. */
+  edgeOverlap?: number;
+  /** Height of the front quiff, in multiples of `volume`, scaled by `stand`. Default 3. */
+  quiff?: number;
+  /** 0..1: how much flatter the hair lies down the sides and back than on the top (no bowl read). Default 0.5. */
+  sideTaper?: number;
+  /** phi (rad from the crown) where that flattening starts, default 0.85. Lower (0.6) keeps the sides of the top close to
+   *  the head, so seen from the front the top doesn't bulge out past the temples as a dark helmet edge. */
+  sideTaperFrom?: number;
+  /**
+   * Width (rad) of the band above the side and back edge where the crop melts into the painted fade: the hair surface
+   * sinks to the scalp, locks thin out and narrow, so the lock layer ends without a ledge and the paint carries the fade on.
+   * 0 turns it off (hard-edged crop). The front hairline is not affected. Default 0.3.
+   */
+  fadeEdge?: number;
+  /** At the front, how far behind the painted hairline (rad) the roots start. Default 0.03. */
+  frontInset?: number;
+  /**
+   * Hairline row: an extra row of outer locks rooted along the front hairline, this many times the lock spacing apart
+   * (e.g. 0.55). The scattered roots leave gaps along the edge, and seen from the front the rising locks are a picket
+   * fence with the paint between them; the row closes the front edge into one mass. 0 or unset: no row.
+   */
+  hairlineRow?: number;
+  /** Keep the locks exactly as built, following the head rigidly (default true; see LockBuildSpec.rigid). */
+  /** LockBuildSpec.surfaceShine for every lock: highlights run in bands over the field, not a dash per lock. Default 0.85. */
+  /** 0..1, default 1: behind the ears the hair lies smooth (longer locks, under layer shaded like the outer one), so the back reads as one combed surface. */
+  backSmooth?: number;
+  /**
+   * |azimuth| (rad) where that smooth back begins, ramping in over 0.8 rad. Default 1.6 (behind the ears). Lower (1.0)
+   * also lays the side above the ear smooth: there the hair turns from combed back to combed down, and short clumped
+   * locks crossing that turn read as dark leaves (they point away from the highlight their neighbours catch).
+   */
+  smoothFrom?: number;
+  /** Width (rad of azimuth, from 1.3) of the turn from combed back over the top to combed down the back. Default 0.9. */
+  combTurn?: number;
+  /** 0..1, default 0: spiked tips fade out beyond |azimuth| 1.0 to 1.4, so the side of the top lies flat. */
+  sideSpikeCut?: number;
+  /** Tips taper this much sooner (share of the lock) in the turn above the ear, |azimuth| about 0.9 to 2.4. Default 0. */
+  turnTaper?: number;
+  surfaceShine?: number;
+  rigid?: boolean;
+  /** Lock length at the top, metres. Locks near the edge run out of room and come out shorter by themselves. Default 0.055. */
+  length?: number;
+  /** Height of the hair surface above the scalp at the top, metres. It thins to about a third at the edge. Default 0.018. */
+  volume?: number;
+  /** 0..1: tips kick up off the surface (textured spikes). Default 0.4. */
+  spike?: number;
+  /** How far (m) a full spike tip leaves the hair surface. Default 0.02. Larger gives the up-standing textured top of a quiff. */
+  spikeHeight?: number;
+  /** 0..1, default 0: share of the outer top locks that become tufts: about half as long, lifting early (t^1.6, not t^3)
+   *  with a little extra lift, so the top reads as a smooth base cap with shorter tufts standing out of it rather than
+   *  one brushed sheet. */
+  tufts?: number;
+  /** Low-frequency waviness (m) of the hair surface, default 0: about 0.005 to 0.01 breaks the even shell of the top into
+   *  gentle rises and dips, so light and shadow fall in broad patches like real piecey hair. */
+  surfaceNoise?: number;
+  /** Extra height (m) of the hair over the centre front, default 0: the middle third of the front stands higher than the
+   *  temples (about 0.015 to 0.025), so the quiff has an arched silhouette instead of a flat block. */
+  centreArch?: number;
+  /** 0..1, default 0: on the sides (beyond |azimuth| 0.8) the under layer is shaded like the outer one, with a lighter
+   *  root. Where outer tips end at different heights the under layer shows between them; shaded darker it read as a stack
+   *  of dark leaves down the side of the top. */
+  sideUnderLight?: number;
+  /** Length multiplier for locks on the side of the top (|azimuth| 0.95 to 2.0, easing back to 1 behind), default 1.
+   *  Longer side locks (about 1.4) leave fewer rows of tips above the ear, so the side reads as one combed surface;
+   *  shorter ones (0.6) made more rows of dark tips. */
+  sideLength?: number;
+  /** How far back (relative to straight up) the quiff pushes the front hair: 0 = straight up, 1 = 45 degrees back. Default 0.25. */
+  quiffBack?: number;
+  /** Clump cards: a wide pointed card over each clump guide, width as a share of `clumpSpacing` (0 = none, about 0.7 for chunky game hair). Default 0. */
+  clumpCards?: number;
+  /** 0..1: the front hairline rises up and back with a little lift (no fringe). Default 0.6. */
+  stand?: number;
+  /** Crown whorl as [signed azimuth, phi]. Default [PI, 0.45]. */
+  whorl?: [number, number];
+  /** Size of the crown whorl (rad on the scalp) inside which hair radiates out from it. Default 0.3. */
+  whorlRadius?: number;
+  /**
+   * 0..1, default 0: behind the ears the hair is combed straight down from where the top turns over the crown, instead of
+   * out from the whorl. Use 1 with `whorlRadius: 0` for combed-back crops (undercuts, slick backs), whose whorl is hidden.
+   */
+  combDown?: number;
+  /** Swirl round the whorl, radians at the whorl, fading out. Default 0.5. */
+  swirl?: number;
+  /** -1..1: sideways comb bias (+ = toward +x). Default 0. */
+  sweep?: number;
+  /** Root spacing of the outer locks, metres (the under layer is 1.35x sparser). Default 0.025. */
+  spacing?: number;
+  /** Lock width, as a multiple of `spacing`. Default 0.65. */
+  clumpWidth?: number;
+  /** Spacing of the clump guides, metres. Larger = fewer, larger swept clumps. Default 0.055. */
+  clumpSpacing?: number;
+  /** 0..1: how strongly lock tips gather onto their clump guide. 0 = an even comb, 1 = tight pointed clumps. Default 0.55. */
+  clump?: number;
+  /** Crown-and-back taper (0..1): away from the front hairline, locks shorten toward the side/back edge, the hair surface
+   *  lowers onto the scalp there and the locks take the root end of the colour gradient, so the top blends into a fade
+   *  with no overhanging shelf. Also turns off the smooth-back lengthening (backSmooth) in proportion. Default 0. */
+  backTaper?: number;
+  /** How far inside the edge (rad) the back taper reaches. Default 0.45; a taller band (0.9) has no cutoff line. */
+  backTaperBand?: number;
+  /** 0..1: through the back taper, this share of locks is dropped toward the edge (squared), so the painted short hair
+   *  shows through more and more and the top fades into it instead of ending along a line. Default 0. */
+  backThin?: number;
+  /** 0..1, default 1: how much the back taper also darkens its locks (AO) and moves them to the root end of the colour
+   *  gradient. 1 suits a top that tapers into solid dark painted short hair; over a tall, lighter fade use 0, or the
+   *  tapered tips read as dark leaves on the light band. */
+  taperShade?: number;
+  /**
+   * Hairline wisps (0..2, default 0): fine short hairs along the front hairline, rooted on the painted edge and lying up and
+   * back over the roots of the front row. The front row's ribbons leave the skin as a row of small teeth along one line;
+   * the wisps break that line into a soft, uneven edge, the way fine hairs at a real hairline do. The value scales how
+   * many there are.
+   */
+  hairlineWisps?: number;
+  /**
+   * 0..1: game chunks. The clump cards become the main hair: thick, rounded pointed chunks that cover the top, with the
+   * narrow locks shortened under them as fill (they show only as darker hair in the gaps). 0 = cards are thin overlays.
+   */
+  /** how far (rad) below the front hairline the flow's front pole sits (default 0.9): lower = parallel lines up and back,
+   *  higher (closer to the hairline) = the front fans out */
+  flowPoleDrop?: number;
+  chunks?: number;
+  /** game chunks: length multiplier for the chunks (1 = about the field locks' length) */
+  chunkLength?: number;
+  /** game chunks: root width (0..1 of full width); wide roots blend each chunk into the mass instead of a point at both ends */
+  chunkRoot?: number;
+  /** game chunks: how deep (m) each chunk's root end starts under the scalp */
+  chunkBury?: number;
+  /** game chunks: away from the front hairline, chunks root at least this far (rad) inside the hair edge */
+  chunkEdgeIn?: number;
+  /** game chunks: the front row of chunks spans this azimuth (rad) either side of the centre */
+  chunkFrontWidth?: number;
+  /** game chunks: the under layer thins out through the tapered back too, so the back chunks end in their own points
+   *  instead of over a ragged fringe of narrow locks */
+  chunkBackThin?: number;
+  /** game chunks: where along a chunk its point starts tapering (0..1, default 0.3); later = a short point, not a long thin streak */
+  chunkTip?: number;
+  /** game chunks: front-row chunks start up to this far (rad) lower than the hairline, at random, for an uneven peaked front edge */
+  chunkFrontJag?: number;
+  /** game chunks: spacing of the front row of chunks (default clumpSpacing); closer than the field so the front shows no paint between them */
+  chunkFrontSpacing?: number;
+  /** game chunks: how late along a chunk the spike lift comes in (power of t, default 2); higher = only the tip leaves the surface */
+  chunkSpikePow?: number;
+  /**
+   * Game chunks (m, default 0): each chunk on the top and crown leans out of the hair surface along its length, so the
+   * whole chunk stands up and out from root to tip (the top gains real height) instead of lying back with only its point
+   * lifting, which seen side on reads as thin streaks. Fades out down the back.
+   */
+  chunkStand?: number;
+  /** Game chunks (default 1): share of chunkStand for the front row, which already rises with the quiff. */
+  chunkFrontStand?: number;
+  /** Game chunks (default 1): width multiplier for the chunks down the back, so they overlap as a few broad pieces. */
+  chunkBackWidth?: number;
+  /** Game chunks (0..1, default 0): share of width the back chunks keep at their ends, so they end in broad tapers that
+   * blend into the fade rather than in thin points with the dark fade showing between them. */
+  chunkBackTipWidth?: number;
+  /** Game chunks (default 0.32): thickness as a share of width. Thicker chunks read as solid pieces when seen side on,
+   * where flat ones show edge-on as thin streaks along the top. */
+  chunkThickness?: number;
+  /** Game chunks (0..1, default 0.6): how round a chunk's cross-section is (LockBuildSpec.roundness). Rounder chunks keep
+   * their body when seen edge-on, as the front row is from the side. */
+  chunkRoundness?: number;
+  /** Game chunks (0..1, default 0): a chunk whose path is cut shorter than this share of its length (by the hairline or
+   * the fade edge) is dropped, since a stub reads as a small detached bit. */
+  chunkMinLen?: number;
+  /** Game chunks (default 1): height of the under layer as a share of its usual height. Under the chunks, the narrow
+   * under locks only fill gaps; at full height they poke up between and above the chunks and show side on as thin
+   * streaks over the top. */
+  chunkUnderHeight?: number;
+  /** Game chunks (rad, default chunkEdgeIn): how far inside the side/back edge the under layer starts. Under locks near
+   * the edge that no chunk covers show as small dark leaves above the temples. */
+  chunkUnderEdgeIn?: number;
+  /** Game chunks (0..1, default 1): share of the under layer kept under the chunks. Its paper-thin locks, lifted with the
+   * quiff, stand above the front chunks and show from the side as dark shards over the crest; with 0 the gaps between
+   * chunks show the painted short hair. */
+  chunkUnderKeep?: number;
+  /** Game chunks (0..1, default 0): flattens the chunks down the back (less thickness and roundness). Domed chunks in
+   * overlapping rows read as scales or feathers; flatter ones lie as one combed surface. */
+  chunkBackFlat?: number;
+  /** Game chunks (default 0.3): a chunk's widest width as a share of its length. Short chunks capped at 0.3 come out
+   * narrow and leave gaps; game art has short, broad pieces. */
+  chunkAspect?: number;
+  /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
+  colorRange?: [number, number];
+  /**
+   * Pieces (m, default 0): each clump becomes a separate raised piece. Locks sit lower the further their root is from their
+   * clump guide (by up to this much at the clump's border), so every clump has a ridge and neighbouring clumps meet in a
+   * valley. With `pieceGroove` and `pieceGather` the top reads as short separate pieces (game hair, textured crops)
+   * instead of one combed sheet whose clumps only meet at the tips. About 0.006 to 0.012.
+   */
+  pieceDepth?: number;
+  /** 0..1, default 0: locks toward a clump's border are shaded darker (layerAO), so the valleys between pieces read as shadow lines. */
+  pieceGroove?: number;
+  /** 0..1, default 0: the outer locks gather onto their guide from near the root (t^0.6 instead of t^1.5), so a piece's locks run together along its length. */
+  pieceGather?: number;
+  /** Radians, default 0: each clump's direction is turned by a random angle up to this, so pieces cross and overlap instead of lying parallel. */
+  pieceTwist?: number;
+  /** 0..1, default 0: random extra height per piece (share of its height), so some pieces stand proud of others. */
+  pieceLift?: number;
+  seed?: number;
+  wMul?: number;
+}
+
+/**
+ * Crop field: a short haircut grown as a field of clumps over the whole haired scalp (short crops, undercut and fade tops,
+ * buzz-plus-top styles). Roots are spread evenly over the scalp down to `hairPhi`; every clump follows one flow field on
+ * the skull (out from the crown whorl, with the front hairline rising up and back), so the surface reads as a few clear
+ * directions instead of a pile of separate flakes. Two layers: a flat under layer for coverage and an outer layer of
+ * pointed 2-lock clumps that carries the volume and texture. Hair gets shorter and flatter toward `hairPhi`, so it blends
+ * into painted sides (fades) without a ledge.
+ */
+export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): void {
+  let st = ((o.seed ?? 4242) >>> 0) || 1;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const wMul = o.wMul ?? 1;
+  const overlap = o.edgeOverlap ?? 0.03;
+  const L0 = o.length ?? 0.055, V0 = o.volume ?? 0.018, spike = o.spike ?? 0.4, stand = o.stand ?? 0.6;
+  const swirl = o.swirl ?? 0.5, sweep = o.sweep ?? 0;
+  const uAt = (az: number, phi: number) => new THREE.Vector3(Math.sin(az) * Math.sin(phi), Math.cos(phi), Math.cos(az) * Math.sin(phi));
+  const azOf = (u: THREE.Vector3) => Math.atan2(u.x, u.z);
+  const phiOf = (u: THREE.Vector3) => Math.acos(THREE.MathUtils.clamp(u.y, -1, 1));
+  const surf = (u: THREE.Vector3, l: number) => new THREE.Vector3(HEAD_CENTER_LOCAL.x + u.x * (SCALP_RX + l), HEAD_CENTER_LOCAL.y + u.y * (SCALP_RY + l), HEAD_CENTER_LOCAL.z + u.z * (SCALP_RZ + l));
+  const W = uAt(o.whorl?.[0] ?? Math.PI, o.whorl?.[1] ?? 0.45);
+  // front pole, far below the hairline (about at the nose), so the hair flows away from it in nearly parallel lines: straight
+  // up and back over the top instead of fanning sideways at the front
+  // (flowPoleDrop: a pole closer under the hairline fans the front out, each side rising up and outward, as stylised
+  // game hair does, instead of a row of parallel vertical bars)
+  const F = uAt(0, o.hairPhi(0) + (o.flowPoleDrop ?? 0.9));
+  // how far (rad) a point is inside the hairline
+  const insideHair = (u: THREE.Vector3) => o.hairPhi(azOf(u)) - phiOf(u);
+  // tangent direction at u leading away from the point P along the great circle
+  const awayFrom = (u: THREE.Vector3, P: THREE.Vector3) => {
+    const d = u.clone().multiplyScalar(u.dot(P)).sub(P);
+    return d.lengthSq() < 1e-10 ? null : d.normalize();
+  };
+  // how much a root belongs to the front hairline (rises up and back)
+  const frontK = (u: THREE.Vector3) => {
+    const az = azOf(u);
+    return stand * (1 - _ss((insideHair(u) - 0.03) / 0.3)) * _ss((1.15 - Math.abs(az)) / 0.45);
+  };
+  // quiff: the hair surface rises toward the front hairline, so the front is pushed up instead of falling as a fringe
+  const frontAzK = (az: number) => _ss((1.05 - Math.abs(az)) / 0.45);
+  const flowAt = (u: THREE.Vector3, fk: number) => {
+    // the head is combed away from the front: up and back over the top, back and down the sides, down the back. Only
+    // close to the crown whorl does the hair radiate out from it (with a swirl), as a real crown does.
+    let d = awayFrom(u, F) ?? new THREE.Vector3(0, 1, 0);
+    // away from F alone, every line would meet again at F's opposite point on the back of the head and read as a
+    // starburst there; behind the ears the hair is instead combed down from the crown whorl
+    // (over combTurn rad of azimuth: a narrow turn bends each lock crossing it from back to down, and seen from the side
+    // the bent ends read as a row of dark crescents)
+    const bK = _ss((Math.abs(azOf(u)) - 1.3) / (o.combTurn ?? 0.9));
+    // (in front of the whorl, combed down from it would run head-on into the hair combed back over the top and crumple
+    // where they meet: there the hair parts sideways around the whorl instead)
+    const aside = (dd: THREE.Vector3 | null) => {
+      if (!dd || dd.dot(d) >= 0) return dd;
+      const sd = dd.clone().addScaledVector(d, -dd.dot(d));
+      return sd.lengthSq() > 1e-8 ? sd.normalize() : null;
+    };
+    // combDown: a combed-back crop has no visible whorl; the back is simply combed straight down from where the top
+    // hair turns over the crown
+    const cd = o.combDown ?? 0;
+    if (bK > 0 && cd < 1) { const dd = aside(awayFrom(u, W)); if (dd) d.lerp(dd, bK * (1 - cd)).normalize(); }
+    if (bK > 0 && cd > 0) {
+      const dn = new THREE.Vector3(0, -1, 0).addScaledVector(u, u.y);
+      if (dn.lengthSq() > 1e-6) d.lerp(dn.normalize(), bK * cd * _ss((phiOf(u) - 0.35) / 0.35)).normalize();
+    }
+    const wR = o.whorlRadius ?? 0.3;
+    const wK = wR > 0 ? Math.exp(-Math.pow(u.angleTo(W) / wR, 2)) : 0;
+    const dw = aside(awayFrom(u, W));
+    if (dw && wK > 0.01) d.lerp(dw, wK).normalize();
+    const a = swirl * wK;
+    if (a !== 0) d = d.clone().multiplyScalar(Math.cos(a)).add(u.clone().cross(d).multiplyScalar(Math.sin(a)));
+    // sweep: the top leans to one side (seen from the front the hair rises on a diagonal instead of in vertical bars,
+    // which read as a hanging fringe); the back stays combed straight down
+    // (never down: on the side the sweep points to, sideways along the scalp also runs down the forehead and temple,
+    // and those locks hang over the face as bangs)
+    if (sweep) {
+      const sx = new THREE.Vector3(1, 0, 0).addScaledVector(u, -u.x);
+      const dn = new THREE.Vector3(0, -1, 0).addScaledVector(u, u.y);
+      if (dn.lengthSq() > 1e-8) { dn.normalize(); const k = sx.dot(dn) * Math.sign(sweep); if (k > 0) sx.addScaledVector(dn, -k * Math.sign(sweep)); }
+      d.addScaledVector(sx, sweep * 0.45 * (1 - bK));
+    }
+    d.addScaledVector(u, -d.dot(u));
+    return d.lengthSq() < 1e-10 ? new THREE.Vector3(0, 0, -1) : d.normalize();
+  };
+  // height of the hair surface above the scalp (m) by position: full on the top, thinning toward the edge and down the
+  // sides and back (a crop's sides lie close, so the head doesn't read as a bowl), and rising toward the front hairline
+  // (the quiff: the front is pushed up and back instead of falling as a fringe)
+  const sideTaper = o.sideTaper ?? 0.5;
+  const smoothFrom = o.smoothFrom ?? 1.6;
+  // fade edge: 1 at the side/back edge, 0 from fadeEdge inside it (none along the front hairline)
+  const fadeW = o.fadeEdge ?? 0.3;
+  const sideEdge = (u: THREE.Vector3) => (fadeW > 0 ? (1 - frontAzK(azOf(u))) * (1 - _ss(insideHair(u) / fadeW)) : 0);
+  // backTaper: from behind the temples round the back, the crop tapers short toward the edge (1 on the edge, 0 from about
+  // 13 cm inside it), so the top blends down into the fade instead of hanging over it as a long shelf
+  // (not over the temples: there the head bulges past the scalp ellipsoid and lowered locks dip into it)
+  const taperAt = (u: THREE.Vector3) => (o.backTaper ?? 0) * _ss((Math.abs(azOf(u)) - 1.2) / 0.6) * (1 - _ss(insideHair(u) / (o.backTaperBand ?? 0.45)));
+  const hairSurface = (u: THREE.Vector3) => {
+    const room = _ss((insideHair(u) + 0.05) / 0.45);
+    const side = 1 - sideTaper * _ss((phiOf(u) - (o.sideTaperFrom ?? 0.85)) / 0.45);
+    // low-frequency rises and dips (by position on the head, so neighbouring locks rise together)
+    const nz = (o.surfaceNoise ?? 0) * (Math.sin(9 * u.x + 1.3) * Math.sin(8 * u.y + 0.4) + 0.6 * Math.sin(11 * u.z + 2.1 + 5 * u.x)) * room * side;
+    // the centre front stands higher than the temples (fades out across the top)
+    const ih = insideHair(u);
+    const arch = (o.centreArch ?? 0) * (1 - _ss(Math.abs(azOf(u)) / 0.7)) * _ss((ih + 0.05) / 0.15) * (1 - _ss((ih - 0.25) / 0.5));
+    return Math.max(0.002, V0 * (0.3 + 0.7 * room) * side * (1 - 0.9 * sideEdge(u)) * (1 - 0.7 * taperAt(u)) + nz + arch);
+  };
+  // the quiff's rise (m), straight up and a little back rather than out of the forehead (out reads as a visor)
+  const quiffUp = new THREE.Vector3(0, 1, -(o.quiffBack ?? 0.25)).normalize();
+  // profile: low where the hair leaves the hairline, highest a few centimetres back, then easing into the top, so the front
+  // is a ramp of rising hair rather than a wall standing on the forehead
+  const quiffAt = (u: THREE.Vector3) => {
+    const ih = insideHair(u);
+    // (from zero at the hairline: a floor there made the front row jump off the scalp as a shelf)
+    return V0 * (o.quiff ?? 3) * stand * frontAzK(azOf(u)) * _ss(ih / 0.22) * (1 - _ss((ih - 0.15) / 0.55));
+  };
+  const taperRange = (r: [number, number], k: number): [number, number] => [THREE.MathUtils.lerp(r[0], 0.02, k), THREE.MathUtils.lerp(r[1], 0.18, k)];
+  const lim = (az: number) => o.hairPhi(az) + overlap + 0.03 + (rnd() - 0.5) * 0.04;
+  // march a centre line over the scalp along the flow; it stops at the edge, so nothing runs down into the fade
+  const march = (u: THREE.Vector3, len: number, fk: number, twist = 0): THREE.Vector3[] => {
+    const steps = 8, arc = len / steps / 0.3;
+    const path: THREE.Vector3[] = [u];
+    for (let k = 1; k <= steps; k++) {
+      const p = path[k - 1];
+      let f = flowAt(p, fk);
+      // (a piece's own direction: the flow turned about the scalp normal)
+      if (twist !== 0) f = f.clone().multiplyScalar(Math.cos(twist)).add(p.clone().cross(f).multiplyScalar(Math.sin(twist)));
+      let q = p.clone().addScaledVector(f, arc).normalize();
+      // (locks that turned along the edge instead of stopping crossed the combed-down locks above the ear as dark
+      // hooks; the hairline row and the edge locks' full roots cover the edge instead)
+      if (phiOf(q) > lim(azOf(q))) break;
+      path.push(q);
+    }
+    return path;
+  };
+  const pathAt = (path: THREE.Vector3[], t: number) => {
+    const f = t * (path.length - 1), j = Math.min(path.length - 2, Math.floor(f));
+    return path[j].clone().lerp(path[j + 1], f - j).normalize();
+  };
+  // even, jittered roots over the haired scalp (Fibonacci points on the unit scalp)
+  const roots = (spacing: number, phase: number, keep: (u: THREE.Vector3) => void) => {
+    const s = spacing / 0.3;
+    const N = Math.round((4 * Math.PI) / (s * s));
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < N; i++) {
+      const y = 1 - (2 * (i + 0.5)) / N;
+      if (y < -0.2) break;
+      const r = Math.sqrt(Math.max(0, 1 - y * y)), ang = i * golden + phase;
+      const u = new THREE.Vector3(r * Math.sin(ang), y, r * Math.cos(ang));
+      const jt = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(s * 0.7);
+      jt.addScaledVector(u, -jt.dot(u));
+      u.add(jt).normalize();
+      // at the front the painted hairline is the edge: roots start just behind it, so the forehead shows the paint's soft
+      // natural hairline and the hair rises from behind it instead of ending in a row of lock ends
+      const az = azOf(u);
+      if (phiOf(u) > o.hairPhi(az) + overlap - frontAzK(az) * (overlap + (o.frontInset ?? 0.03))) continue;
+      keep(u);
+    }
+  };
+  // clump guides: neighbouring locks pull their tips onto the nearest guide, so the field forms larger swept clumps with
+  // pointed ends (and highlights that run along them) while the roots stay evenly spread
+  type Guide = { u: THREE.Vector3; path: THREE.Vector3[]; vol: number; spike: number; tuft: boolean; lift: number; twist: number; front?: boolean };
+  const guides: Guide[] = [];
+  const pieceDepth = o.pieceDepth ?? 0, pieceGroove = o.pieceGroove ?? 0, pieceGather = o.pieceGather ?? 0;
+  // clump radius on the unit scalp (a root this far from its guide is on the clump's border)
+  const clumpR = (o.clumpSpacing ?? 0.055) / 0.3 * 0.6;
+  roots(o.clumpSpacing ?? 0.055, 0.7, (u) => {
+    const fk = frontK(u);
+    // pieces turn less at the front hairline, where the flow must rise up and back
+    const twist = o.pieceTwist ? o.pieceTwist * (rnd() * 2 - 1) * (1 - fk) : 0; // (no rnd() call unless used: other styles keep their exact layout)
+    const path = march(u, L0 * (1 - 0.3 * fk), fk, twist);
+    if (path.length < 3) return;
+    // spikes only on the top, not the sides (spiked tips lifted off the side lie over the hair below as separate dark
+    // leaves, seen from three-quarters)
+    const topK = _ss((1.0 - phiOf(u)) / 0.6) * (1 - (o.sideSpikeCut ?? 0) * _ss((Math.abs(azOf(u)) - 1.0) / 0.4));
+    // a share of the top guides are tufts: their outer locks are shorter and lift early, standing out of the base cap
+    const tuft = topK > 0.3 && rnd() < (o.tufts ?? 0);
+    guides.push({ u, path, vol: (0.9 + 0.2 * rnd()) * (o.pieceLift ? 1 + o.pieceLift * rnd() * topK : 1), spike: spike * (0.4 + 1.2 * rnd()) * topK, tuft, lift: tuft ? 0.8 + 0.6 * rnd() : 1, twist });
+  });
+  // game chunks: a row of guides along the front hairline, so the front's chunks grow from the hairline itself instead of
+  // leaving a strip of paint in front of the first row of field guides
+  if ((o.chunks ?? 0) > 0) {
+    const step = (o.chunkFrontSpacing ?? o.clumpSpacing ?? 0.055) / 0.3 * 0.75;
+    const fw = o.chunkFrontWidth ?? 1.0;
+    for (let az = -fw; az <= fw; az += step / Math.max(0.3, Math.sin(o.hairPhi(0)))) {
+      const a = az + (rnd() - 0.5) * step * 0.3;
+      // (chunkFrontJag: each chunk starts a random way lower, so the front edge is a row of uneven peaks, not a ruled band)
+      const u = uAt(a, o.hairPhi(a) + 0.03 + (o.chunkFrontJag ?? 0) * Math.pow(rnd(), 1.5));
+      const fk = frontK(u);
+      const twist = o.pieceTwist ? o.pieceTwist * (rnd() * 2 - 1) * (1 - fk) : 0;
+      const path = march(u, L0, fk, twist);
+      if (path.length < 3) continue;
+      guides.push({ u, path, vol: 0.95 + 0.1 * rnd(), spike: spike * (0.4 + 0.8 * rnd()), tuft: false, lift: 1, twist, front: true });
+    }
+  }
+  const nearestGuide = (u: THREE.Vector3) => {
+    let best: Guide | null = null, bd = -2;
+    for (const g of guides) { const d = g.u.dot(u); if (d > bd) { bd = d; best = g; } }
+    return best;
+  };
+  for (let layer = 0; layer < 2; layer++) {
+    const outer = layer === 1;
+    const spacing = (o.spacing ?? 0.025) * (outer ? 1 : 1.35);
+    const clumpK = (o.clump ?? 0.55) * (outer ? 1 : 0.4);
+    const grow = (u: THREE.Vector3) => {
+      const az0 = azOf(u), phi0 = phiOf(u);
+      const edgePhi = o.hairPhi(az0);
+      const fk = frontK(u);
+      // toward the fade the crop thins out (fewer, narrower locks), so the paint under it shows through more and more
+      const se = sideEdge(u);
+      // (and through a tapered back, fewer locks toward the edge: the painted short hair shows through more and more, so
+      // the top fades into it instead of ending along a line)
+      if (rnd() < 0.55 * se * se + (o.backThin ?? 0) * Math.pow(taperAt(u), 2)) return; // (squared: fewer gaps where the band is shallow, so the temples never show lone locks on the paint)
+      // (game chunks: the cards are the outer hair, so the narrow outer locks go; the under layer thins out toward the
+      // fade, so the sides show the smooth painted short hair below the chunks instead of a stack of dark leaves)
+      if ((o.chunks ?? 0) > 0 && rnd() < (o.chunks ?? 0) * (outer ? 1 : Math.min(1, 2 * se + (o.chunkBackThin ?? 0) * taperAt(u)))) return;
+      // (chunkUnderKeep: share of the under layer kept under the chunks. Its locks are paper thin and lie at the cards'
+      // height; at the front the quiff lifts them over the front row, and from the side their edge-on locks show over the
+      // crest as a tangle of dark shards. Where the cards leave gaps, the painted short hair shows instead)
+      if ((o.chunks ?? 0) > 0 && !outer && rnd() >= (o.chunkUnderKeep ?? 1)) return;
+      // (and none where no chunk covers it: near the side edge the under layer's ends lay on the painted undercut as dark
+      // leaves, seen from three-quarters and the side)
+      if ((o.chunks ?? 0) > 0 && !outer && (se > 0.05 || (1 - frontAzK(az0)) * (o.chunkUnderEdgeIn ?? o.chunkEdgeIn ?? 0) > insideHair(u))) return;
+      const g = nearestGuide(u);
+      // the outer layer lies on the hair surface, the under layer below it; a hair's breadth of order between locks
+      const layerMul = (outer ? 1 : 0.85 * ((o.chunks ?? 0) > 0 ? (o.chunkUnderHeight ?? 1) : 1)) * (g ? g.vol : 1), order = outer ? 0.0015 * rnd() : 0;
+      // behind the ears the short back hair lies smooth, combed down: longer locks (fewer rows of tips) and an under layer
+      // shaded like the outer one, so the back reads as one combed surface rather than shingles with dark gaps
+      const backK = _ss((Math.abs(az0) - smoothFrom) / 0.8) * (o.backSmooth ?? 1);
+      const tuftLock = outer && !!g && g.tuft;
+      // (a tapered back is short hair: no smooth-back lengthening there, and shorter locks toward the edge)
+      const bt = taperAt(u);
+      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) * (1 - 0.6 * bt) * (tuftLock ? 0.5 + 0.15 * rnd() : 1) * (1 - 0.35 * (o.chunks ?? 0))
+        * (1 + ((o.sideLength ?? 1) - 1) * _ss((Math.abs(az0) - 0.95) / 0.35) * (1 - _ss((Math.abs(az0) - 2.0) / 0.4)));
+      // (a piece's locks follow its turned direction; the under layer keeps the plain flow)
+      const path = march(u, len, fk, outer && g && pieceGather > 0 ? g.twist : 0);
+      if (path.length < 3) return;
+      const realLen = (path.length - 1) * (len / 8);
+      // pieces: 0 on the guide, 1 on the clump's border (outer layer only; fading out toward the fade edge and the front hairline)
+      const pieceOff = outer && g && (pieceDepth > 0 || pieceGroove > 0) ? Math.min(1, u.angleTo(g.u) / clumpR) * (1 - se) * (1 - 0.6 * fk) : 0;
+      const sp = outer && g ? g.spike : 0;
+      // closeness to the front hairline (1 on it, 0 from about 6 cm inside)
+      const edgeK = frontAzK(az0) * (1 - _ss(insideHair(u) / 0.2));
+      const pts: THREE.Vector3[] = [];
+      for (let n = 0; n < NODES_PER_LOCK; n++) {
+        const t = n / (NODES_PER_LOCK - 1);
+        let cu = pathAt(path, t);
+        // the tip gathers onto the guide: guide position at the same distance from its root, shifted by this root's offset
+        // fading out, so the clump narrows to a point rather than collapsing onto one line
+        // (not at the front hairline, where the flow fans out and pulled tips would cross into knots)
+        if (g && clumpK > 0 && fk < 0.95) {
+          const gt = Math.min(1, (t * realLen) / Math.max(0.01, (g.path.length - 1) * (L0 / 8)));
+          const gu = pathAt(g.path, gt);
+          // (behind the ears the short back hair lies smooth: little gathering, so no pointed leaves down the back)
+          const gatherT = outer ? THREE.MathUtils.lerp(Math.pow(t, 1.5), Math.pow(t, 0.6), pieceGather) : Math.pow(t, 1.5);
+          cu = cu.lerp(gu, clumpK * (1 - fk) * (1 - 0.75 * _ss((Math.abs(az0) - smoothFrom) / 0.8)) * gatherT).normalize();
+        }
+        // height: the root climbs out of the scalp in the first quarter, then the lock lies on one smooth hair surface
+        // (hairSurface, by position on the head, not by lock). Neighbouring locks then curve the same way at the same
+        // place, so highlights run as broad bands across the clumps instead of a dash on every lock; spiked clump
+        // tips leave the surface for the textured silhouette
+        // at the front hairline the climb is slower, so the lock leans back as it rises (a ramp, not a wall facing the
+        // camera) and its root starts on the skin, with no dark gap under it
+        const rise = _ss(t / (0.25 + 0.3 * edgeK));
+        const h = 0.0032 - 0.016 * edgeK * (1 - _ss(t / 0.2)) + (hairSurface(cu) * layerMul + order) * rise - Math.min(pieceDepth * pieceOff * pieceOff, 0.6 * hairSurface(cu) * layerMul) * rise + sp * (o.spikeHeight ?? 0.02) * (tuftLock ? g!.lift * Math.pow(t, 1.6) : Math.pow(t, 3));
+        const qh = quiffAt(cu) * layerMul * rise;
+        const base = surf(cu, 0);
+        const nrm = surf(cu, 1).sub(base).normalize();
+        pts.push(base.addScaledVector(nrm, h).addScaledVector(quiffUp, qh));
+      }
+      specs.push({
+        pointsLocal: pts,
+        // front hairline locks are seen face on as they rise: a little wider so the front reads full, not as a comb
+        width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6 - 0.25 * bt)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
+        // the under layer is darker, except at the front hairline where it is seen face on beside the outer locks
+        // (toward the fade the layers lie flat on the paint: no under-layer shadow, so the edge isn't a dark rim)
+        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.35 * bt * (o.taperShade ?? 1)) * (1 - pieceGroove * pieceOff * pieceOff), layerOrder: outer ? 3 : 2, smooth: 2,
+        // (in the turn from combed back to combed down above the ear, tips taper sooner and melt into the layer below
+        // instead of ending as hard wedges)
+        tipStart: (outer ? 0.5 : 0.6) + 0.15 * backK - (o.turnTaper ?? 0) * _ss((Math.abs(az0) - 0.9) / 0.4) * (1 - _ss((Math.abs(az0) - 2.2) / 0.4)), lockNormal: false,
+        // full roots (>= 0.5): narrow ones make every lock a petal pointed at both ends
+        // (at the front hairline the hair grows in from a point out of the painted edge, lighter, so the edge isn't a row
+        // of dark rounded ends)
+        // (full roots at the front hairline too: seen from the front, narrow roots are a row of downward points along the
+        // forehead, which reads as hanging bangs)
+        // (the root shading follows scalpRoot: outer locks lie on other hair, not on the skin, so their roots stay light.
+        // A dark root band under each row of tips read as dark wedges on the side of the top; the width keeps the
+        // usual 36% root)
+        scalpRoot: edgeK > 0.4 ? 0.3 : outer ? 0.2 : 0.55 - 0.3 * (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4), rootWidth: edgeK > 0.4 ? 0.95 : 0.36,
+        // a crop is too short to move, and densely layered: kept exactly as built
+        rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        // the highlight follows the comb direction at this root (its march along the flow, before the tip gathers onto the
+        // clump guide), shared by its neighbours: they shine together instead of each lock catching the light on its own
+        shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
+        // each lock is a piece of longer hair: no light tip on every lock (that dots the surface)
+        // (the under layer a little darker for depth between clumps, but no dark roots: seen through gaps in the outer layer,
+        // dark roots read as holes)
+        // (toward a tapered edge the locks move to the root end of the gradient, the colour of the painted short hair below)
+        colorRange: o.colorRange ?? taperRange(tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55], bt * (o.taperShade ?? 1)),
+      });
+    };
+    roots(spacing, layer * 1.3, grow);
+    // the hairline row: evenly along the front edge, just behind it (with the same jitter as the field)
+    if (outer && (o.hairlineRow ?? 0) > 0) {
+      const step = (spacing * o.hairlineRow!) / 0.3;
+      for (let az = 0; az <= 1.25; ) {
+        for (const sg of az === 0 ? [1] : [1, -1]) {
+          const a = sg * az + (rnd() - 0.5) * step * 0.4;
+          const ph = o.hairPhi(a) + overlap - (overlap + (o.frontInset ?? 0.03)) - (0.005 + 0.02 * rnd());
+          if (frontAzK(a) > 0.05) grow(uAt(a, ph));
+        }
+        az += step / Math.max(0.3, Math.sin(o.hairPhi(az)));
+      }
+    }
+  }
+  // clump cards: one wide pointed card on top of each clump guide, so the top reads as a few chunky swept clumps (game
+  // hair) with the narrow locks underneath as their texture and coverage
+  const cardW = o.clumpCards ?? 0;
+  const chunkK = o.chunks ?? 0;
+  if (cardW > 0) {
+    for (const g of guides) {
+      const se = sideEdge(g.u);
+      if (se > 0.6) continue; // the fade band stays fine-textured
+      if (chunkK === 0 && Math.abs(azOf(g.u)) > 2.0 && phiOf(g.u) > 0.6) continue; // and so does the back below the crown (game chunks keep it)
+      if (g.u.angleTo(W) < 1.6 * (o.whorlRadius ?? 0.3) && (o.combDown ?? 0) < 1) continue; // and the crown whorl (cards there radiate as a starburst)
+      const fk = frontK(g.u);
+      // (game chunks: no chunks on the sides, where they stack as dark leaves above the fade; the back's chunks run as
+      // long as the smooth back hair below them, so they read as long combed-down pieces rather than scales)
+      if (chunkK > 0 && se > 0.05) continue;
+      // (nor close to the side/back edge, where a chunk's flat end shows edge-on above the ear as a dark block)
+      if (chunkK > 0 && !g.front && (1 - frontAzK(azOf(g.u))) * (o.chunkEdgeIn ?? 0) > insideHair(g.u)) continue;
+      const backK = _ss((Math.abs(azOf(g.u)) - smoothFrom) / 0.8) * (o.backSmooth ?? 1);
+      const cLen = L0 * (1 - 0.3 * fk) * (chunkK > 0 ? (1 + 0.25 * chunkK) * (o.chunkLength ?? 1) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) : 1);
+      const path = chunkK > 0 ? march(g.u, cLen, fk, g.twist) : g.path;
+      if (path.length < 3) continue;
+      const realLen = (path.length - 1) * (cLen / 8);
+      if (chunkK > 0 && realLen < (o.chunkMinLen ?? 0) * cLen) continue;
+      const cw = Math.min((o.clumpSpacing ?? 0.055) * cardW, realLen * (chunkK > 0 && o.chunkAspect ? o.chunkAspect : 0.45 - 0.15 * chunkK)) * (0.85 + 0.3 * rnd()) * wMul * (1 - 0.4 * se) * (chunkK > 0 ? 1 + ((o.chunkBackWidth ?? 1) - 1) * backK : 1);
+      // (chunkStand: the top's chunks lean out along their length; none down the back, which lies combed down)
+      const standK = chunkK > 0 ? (o.chunkStand ?? 0) * (g.front ? (o.chunkFrontStand ?? 1) : 1) * (1 - backK) * (1 - _ss((phiOf(g.u) - 0.7) / 0.5)) : 0;
+      const pts: THREE.Vector3[] = [];
+      for (let n = 0; n < NODES_PER_LOCK; n++) {
+        const t = n / (NODES_PER_LOCK - 1);
+        const cu = pathAt(path, t);
+        const rise = _ss(t / 0.25);
+        // (game chunks: the root end starts under the scalp, so the chunk grows out of the painted short hair instead of
+        // showing its cut end, which along the diagonal front read as a sawtooth and above the ear as dark blocks)
+        const h = (chunkK > 0 ? THREE.MathUtils.lerp(-(o.chunkBury ?? 0), 0.0025, _ss(t / 0.2)) : 0.0025) + (hairSurface(cu) * g.vol + 0.003) * rise + g.spike * (o.spikeHeight ?? 0.02) * Math.pow(t, chunkK > 0 ? (o.chunkSpikePow ?? 2) : 2) + standK * g.vol * Math.pow(t, 1.4);
+        const qh = quiffAt(cu) * g.vol * rise;
+        const base = surf(cu, 0);
+        const nrm = surf(cu, 1).sub(base).normalize();
+        pts.push(base.addScaledVector(nrm, h).addScaledVector(quiffUp, qh));
+      }
+      specs.push({
+        pointsLocal: pts,
+        width: cw,
+        thickness: chunkK > 0 ? Math.max(0.0025, cw * (o.chunkThickness ?? 0.32) * chunkK * (1 - (o.chunkBackFlat ?? 0) * backK)) : 0.0025, roundness: chunkK > 0 ? (o.chunkRoundness ?? 0.6) * chunkK * (1 - (o.chunkBackFlat ?? 0) * backK) : undefined,
+        stiffnessBias: 0.97, layerAO: 0.9 + 0.1 * rnd(), layerOrder: 4, smooth: 2,
+        // pointed: the taper starts early so each clump narrows to one tip
+        // (a card lies on the locks, not on the skin: a light root like the outer locks'. With the usual dark root every
+        // card's first fifth read as a dark leaf on the side of the top)
+        tipStart: chunkK > 0 ? (o.chunkTip ?? 0.45 - 0.15 * chunkK) : 0.45, tipWidth: chunkK > 0 && o.chunkBackTipWidth ? o.chunkBackTipWidth * backK : undefined, lockNormal: false, scalpRoot: 0.2, rootWidth: chunkK > 0 ? (o.chunkRoot ?? (g.front ? 0.8 : 0.36)) : undefined, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
+        colorRange: o.colorRange ?? [0.3, 0.75],
+      });
+    }
+  }
+  // hairline wisps: fine short hairs along the front edge (own random stream, so the rest of the field is unchanged)
+  const wispK = o.hairlineWisps ?? 0;
+  if (wispK > 0) {
+    let ws = (((o.seed ?? 4242) * 7 + 101) >>> 0) || 1;
+    const wr = () => { ws = (ws * 1664525 + 1013904223) >>> 0; return ws / 4294967296; };
+    const step = 0.011 / wispK;
+    for (let az = -1.15; az <= 1.15; az += step) {
+      const a = az + (wr() - 0.5) * step;
+      const fa = frontAzK(a);
+      if (fa < 0.1 || wr() > 0.35 + 0.65 * fa) continue;
+      // rooted from just outside the lock edge (on the painted strip) to a little inside it
+      let u = uAt(a, o.hairPhi(a) + 0.018 - 0.04 * Math.pow(wr(), 1.5));
+      const len = (0.012 + 0.03 * wr()) * (0.6 + 0.4 * fa);
+      const turn = (wr() - 0.5) * 1.1 + sweep * 0.25;
+      const steps = 6, arc = len / steps / 0.3;
+      const path: THREE.Vector3[] = [u];
+      for (let k = 0; k < steps; k++) {
+        let f = flowAt(u, 1);
+        f = f.clone().multiplyScalar(Math.cos(turn)).add(u.clone().cross(f).multiplyScalar(Math.sin(turn)));
+        u = u.clone().addScaledVector(f, arc).normalize();
+        path.push(u);
+      }
+      const lift = 0.002 + 0.004 * wr();
+      const pts: THREE.Vector3[] = [];
+      for (let n = 0; n < NODES_PER_LOCK; n++) {
+        const t = n / (NODES_PER_LOCK - 1);
+        const cu = pathAt(path, t);
+        const base = surf(cu, 0);
+        const nrm = surf(cu, 1).sub(base).normalize();
+        pts.push(base.addScaledVector(nrm, 0.0028 + lift * Math.pow(t, 0.8)));
+      }
+      specs.push({
+        pointsLocal: pts, width: (0.004 + 0.004 * wr()) * wMul, thickness: 0.0015, stiffnessBias: 0.97, layerAO: 0.92 + 0.08 * wr(),
+        layerOrder: 4, smooth: 2, tipStart: 0.35, lockNormal: false, scalpRoot: 0.05, rootWidth: 0.4, rigid: o.rigid ?? true,
+        surfaceShine: o.surfaceShine ?? 0.85, shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
+        colorRange: o.colorRange ?? [0.2, 0.6],
+      });
+    }
+  }
+}
+
+/**
+ * Short side layer: flat, closely cut locks lying down the sides and back from under the top to where the painted fade
+ * takes over (`endPhi`, signed azimuth). Gives the upper sides real texture so a textured top blends into a painted fade
+ * instead of sitting on it like a cap. The forehead (|az| < 0.75) is skipped.
+ */
+export function sideLayerLocks(specs: LockBuildSpec[], o: { endPhi: (az: number) => number; topPhi?: number; count?: number; width?: number; seed?: number; wMul?: number; sweepBack?: number }): void {
+  let st = ((o.seed ?? 4242) >>> 0) || 1;
+  const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const n = o.count ?? 90;
+  for (let row = 0; row < 2; row++) {
+    for (let i = 0; i < n; i++) {
+      const az = -Math.PI + ((i + 0.5 + row * 0.5) / n) * Math.PI * 2 + (rnd() - 0.5) * 0.02;
+      if (Math.abs(az) < 0.75) continue;
+      const end = o.endPhi(az) - rnd() * 0.14; // ragged ends: no visible cut line
+      const start = (o.topPhi ?? 0.85) + row * 0.12 + (rnd() - 0.5) * 0.05;
+      if (end - start < 0.12) continue;
+      const back = (o.sweepBack ?? 0.12) * Math.sign(az) * _ss((Math.abs(az) - 0.75) / 0.8) * (1 - _ss((Math.abs(az) - 2.6) / 0.5));
+      const pts = buildSculptedLock({ thetaStart: az, thetaEnd: az + back, phiStart: start, phiEnd: end, baseLift: 0.003 - row * 0.001, midArch: 0.001, tipFlickOut: -0.002, napeHug: 1.4 });
+      specs.push({ pointsLocal: pts, width: ((o.width ?? 0.04) + rnd() * 0.01) * (o.wMul ?? 1), thickness: 0.004, stiffnessBias: 0.99, layerAO: 0.78 + 0.1 * row, layerOrder: 1 + row, lockNormal: false, scalpRoot: 0.5, tipStart: 0.55, smooth: 2 });
+    }
+  }
+}
+
+export interface FadePaintOptions extends EarCutOptions {
+  /** 0..1: fade band height as a share of (cut line at the ear - topPhi). 0 = a short band at the cut line. Default 0.4. */
+  fadeHeight?: number;
+  /** phi where the side hair begins (top of the side region). Default 1.0. */
+  topPhi?: number;
+  /** Paint density left at the cut line: 0 fades to skin, ~0.3 leaves visible stubble. Default 0.2. */
+  stubble?: number;
+  /** Softness of the final cut line (rad). Default 0.05. */
+  feather?: number;
+  /** Stipple of the partial-density band (0 smooth, 1 strongly dotted). Default 0.6. */
+  grain?: number;
+  /** >= 1: grain stretched along the comb (ScalpPaint.grainStretch), so the fade reads as short hairs. Default 1. */
+  grainStretch?: number;
+  /** 0..1: how much of the sideburn stays solid instead of fading (the fade band shrinks over the sideburn). Default 0.6. */
+  sideburnSolid?: number;
+  /**
+   * Front hairline blend (rad): over the forehead the paint thins from full to its edge density across this band instead
+   * of standing solid right up to the hairline, so the front edge is a soft gradient, not a dark painted brim. Default 0.
+   */
+  frontBlend?: number;
+  /**
+   * 0..1: fade blend width. Higher = a longer, smoother gradient from full side hair to the cut line and a softer last
+   * edge, so the top length melts into the short sides; 0 = a tight band with a crisp edge. Default 0.5.
+   */
+  blend?: number;
+  /**
+   * 0..1+: behind the ears the fade band grows by (1 + backBlend), reaching full size at the nape, so a taper at the back
+   * starts right where the back locks end instead of leaving a solid painted strip (a dark shelf) between them. Default 0.
+   */
+  backBlend?: number;
+}
+
+/**
+ * Painted fade (barber fade / taper) for any short-sided style: solid painted side hair down to the fade, a gradient to
+ * `stubble` at the ear-aligned cut line (pointed sideburn in front of the ear, arch over the ear, curved nape), then a soft
+ * edge. The front hairline gets no fade. Use it from SCALP_PAINT_BY_ARCHETYPE; it replaces modelled fade-cap locks.
+ */
+export function fadeScalpPaint(o: FadePaintOptions = {}): ScalpPaint {
+  const h = THREE.MathUtils.clamp(o.fadeHeight ?? 0.4, 0, 1);
+  const top = o.topPhi ?? 1.0;
+  // fade band (rad) measured at the ear arch, kept the same all round so the sideburn and nape fade like the sides
+  const archCut = earAlignedCutPhi(EAR_CENTER_THETA, o);
+  const bl = THREE.MathUtils.clamp(o.blend ?? 0.5, 0, 1);
+  const band = Math.max(0.04, h * (archCut - top) * (0.7 + 0.6 * bl));
+  return { ...makeScalpPaint({
+    full: (az) => {
+      const a = Math.abs(az);
+      const cut = earAlignedCutPhi(a, o);
+      const sideK = _ss((a - 0.75) / 0.6); // no fade on the forehead
+      // over the sideburn (from the start of its taper to just past its tip) the band shrinks so the sideburn reads solid
+      const tip = earSideburnTip(o);
+      const a0 = tip.theta - (o.sideburnTaper ?? 0.4);
+      const sb = _ss((a - a0) / 0.06) * (1 - _ss((a - tip.theta - 0.02) / 0.06));
+      // (topPhi caps how high the fade climbs; where the hairline itself is higher, as at raised temple corners, the
+      // hairline wins, so the paint never runs solid past the cut line)
+      const fb = (1 - sideK) * (o.frontBlend ?? 0);
+      const backK = 1 + (o.backBlend ?? 0) * _ss((a - (EAR_BACK_THETA + 0.1)) / 0.6);
+      return Math.max(Math.min(top, cut - fb), cut - sideK * band * backK * (1 - (o.sideburnSolid ?? 0.6) * sb) - fb);
+    },
+    edge: (az) => earAlignedCutPhi(Math.abs(az), o),
+    edgeDensity: (az) => THREE.MathUtils.lerp(0.55, o.stubble ?? 0.2, _ss((Math.abs(az) - 0.75) / 0.6)),
+    feather: (o.feather ?? 0.05) * (0.6 + 0.8 * bl),
+    grain: o.grain ?? 0.6,
+  }), ...(o.grainStretch && o.grainStretch > 1 ? { grainStretch: o.grainStretch } : {}) };
+}
+
+/**
+ * Rounded front hairline for EarCutOptions.hairlinePhi: `centre` at the middle of the forehead, rising by `cornerLift`
+ * (rad, toward the crown) as it rounds into the temples over `width` (rad of azimuth). Gives the soft curved hairline of
+ * most men's cuts instead of a straight edge across the forehead; templeRecede then adds the temple dip.
+ */
+export function roundedHairline(centre = 1.28, cornerLift = 0.06, width = 0.7): (az: number) => number {
+  return (az) => centre - cornerLift * Math.pow(Math.min(1, Math.abs(az) / width), 2);
+}
+
+/**
+ * Irregular hairline (rad by signed azimuth, to add to a hairline phi): a low, uneven wobble of about +-`amount` over the
+ * front (fading out by |azimuth| 1.3), so the edge where hair meets forehead is not a ruled line. Use the same wobble for
+ * the locks' edge and anything else that must follow it.
+ */
+export function hairlineWobble(amount: number, seed = 0): (az: number) => number {
+  return (az) => amount * (0.55 * Math.sin(7.3 * az + 1.1 + seed) + 0.3 * Math.sin(13.7 * az + 2.3 + 1.7 * seed) + 0.15 * Math.sin(23.1 * az + 0.4 + seed))
+    * (1 - _ss((Math.abs(az) - 0.9) / 0.4));
+}
+
+/** Lowest natural hairline (phi by signed azimuth): automatic scalp paint never goes past it onto the face, ears or neck. */
+export function naturalMaxHairlinePhi(az: number): number {
+  return earAlignedCutPhi(az, { sideburnLength: 0.7, hairlinePhi: 1.3, templeRecede: 0.04, napePhi: 2.2 });
+}
+
+/**
+ * Per-archetype scalp paint (see scalpPaint.ts). Styles that need painted short hair (fades, stubble sideburns, shaved
+ * patterns) register a function here; it receives the automatic contact paint and returns the paint to use.
+ */
+export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx: { config: HairBuilderConfig; specs: LockBuildSpec[]; auto: ScalpPaint }) => ScalpPaint>> = {};
+
+/** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
+export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
+  return {
+    hairlinePhi: roundedHairline(1.06, 0.03, 0.75), templeRecede: 0.0, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.55, sideburnCurve: 0.6, sideburnGap: 0.03,
+    earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.55, config.backLength), napeCurve: 0.45,
+  };
+}
+/**
+ * Paint reaching past the front hairline: over the forehead (fading out by |azimuth| `width`) the paint's full and edge
+ * lines move `reach` rad down the forehead. Lock roots along a front hairline leave the scalp as a row of small teeth
+ * (each ribbon crosses the skin at a slight slant); with full-density paint under that row instead of the paint's thin
+ * edge, the teeth sit on hair colour and the hairline reads as hair growing out of a soft painted edge.
+ */
+export function extendFrontPaint(p: ScalpPaint, reach: number, width = 0.9, wobble?: (az: number) => number): ScalpPaint {
+  if (reach <= 0) return p;
+  // (wobble: the same uneven edge as the locks' hairline, hairlineWobble, so the painted strip follows it)
+  const k = (i: number) => { const az = binAzimuth(i, p.bins); return reach * (1 - _ss((Math.abs(az) - width * 0.6) / (width * 0.4))) + (wobble ? wobble(az) : 0); };
+  return { ...p, fullPhi: p.fullPhi.map((v, i) => v + k(i)), edgePhi: p.edgePhi.map((v, i) => v + k(i)) };
+}
+
+/** Painted sides of undercut-fade (also where its top hair drapes to). */
+export function undercutFadePaint(config: HairBuilderConfig): ScalpPaint {
+  // (front hairline row of roots sits on full paint; the hair itself is placed from the unextended cut, undercutFadeBasePaint)
+  return extendFrontPaint(undercutFadeBasePaint(config), 0.025, 0.9, undercutHairlineWobble(config));
+}
+/** The uneven front edge of undercut-fade, shared by its locks and its painted strip. */
+export function undercutHairlineWobble(config: HairBuilderConfig): (az: number) => number {
+  return hairlineWobble(0.04, (config.seed || 1337) * 0.001);
+}
+/** undercut-fade paint before extendFrontPaint: the cut the hair is built to. */
+export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 0.3): ScalpPaint {
+  // thin tapered sideburn (mostly faded), wide soft blend from the top length into the short sides
+  // (shaded under the hair, so the side locks lie on darker short hair instead of ending as dark leaves on a lit band)
+  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.55, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend, grainStretch: 5 }), underShade: 0.5 };
+}
+SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => undercutFadePaint(config);
+
+/**
+ * Scalp paint for a built style: automatic from the locks' scalp contact, or the archetype's own, then the shared hairline
+ * look (config.hairlineSoftness, hairlineIrregularity, scalpColor) so every style gets the same soft, hair-coloured edge.
+ */
+export function scalpPaintForConfig(config: HairBuilderConfig, specs: LockBuildSpec[]): ScalpPaint {
+  setEarLandmarks(config.earLandmarks);
+  const auto = deriveScalpPaint(specs, naturalMaxHairlinePhi);
+  const f = SCALP_PAINT_BY_ARCHETYPE[config.archetype];
+  const base = f ? f({ config, specs, auto }) : auto;
+  return applyHairlineLook(base, { softness: config.hairlineSoftness, irregularity: config.hairlineIrregularity, color: config.scalpColor });
 }
 
 function buildSculptedLock(params: {
@@ -1023,7 +2129,18 @@ const ARCHETYPE_LABELS: Record<HairBuilderArchetype, string> = ARCHETYPE_METADAT
  * Generates a cohesive, anatomically sealed, layered Final Fantasy / JRPG hairstyle directly
  * from parametric HairBuilderConfig controls across all 12 distinct archetypes.
  */
+/**
+ * Builds a style's locks: the archetype, then the outer-shape shell (config.shell, hairShell.ts) when the recipe has one.
+ */
 export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[] {
+  const specs = buildArchetypeSpecs(config);
+  if (config.shell?.mm?.length) applyHairShell(specs, config.shell);
+  return specs;
+}
+
+/** The archetype's own locks, before the shell. */
+export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] {
+  setEarLandmarks(config.earLandmarks);
   const rand = seededRand(config.seed || 1337);
   const specs: LockBuildSpec[] = [];
 
@@ -1770,170 +2887,60 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
   // ARCH-BEGIN undercut-fade
   if (arch === 'undercut-fade') {
     const sweepSign = config.bangsSweep >= 0 ? 1 : -1;
-    const fadeNapeEnd = THREE.MathUtils.lerp(2.12, 2.32, config.backLength);
-    const frontHairline = 1.28;
-    const smooth01 = (x: number) => { const c = THREE.MathUtils.clamp(x, 0, 1); return c * c * (3 - 2 * c); };
-    const mkU = (sd: number) => { let st = (sd >>> 0) || 1; return () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; }; };
     const seedU = (config.seed || 1337);
-    const rS1 = mkU(seedU + 11), rS2 = mkU(seedU + 22), rS3 = mkU(seedU + 33), rS4 = mkU(seedU + 44), rS5 = mkU(seedU + 55);
     // cut line phi(|theta|): shared ear-aligned helper (pointed sideburn in front of the ear, arch over the ear, curved nape)
-    const cutPhi = (th: number): number => earAlignedCutPhi(th, { hairlinePhi: frontHairline, templeRecede: 0.12, sideburnLength: THREE.MathUtils.lerp(0.55, 0.7, config.sideLength), sideburnTaper: 0.14, earClearance: 0.06, napePhi: fadeNapeEnd, napeCurve: 1.3 });
-    const domePt = (x: number, z: number, lift: number): THREE.Vector3 => {
-      const nx = x / SCALP_RX;
-      const nz = z / SCALP_RZ;
-      const r2 = nx * nx + nz * nz;
-      const scale = r2 > 0.88 ? Math.sqrt(0.88 / r2) : 1.0;
-      const cx = nx * scale;
-      const cz = nz * scale;
-      const cy = Math.sqrt(Math.max(0.04, 1.0 - cx * cx - cz * cz));
-      return new THREE.Vector3(
-        HEAD_CENTER_LOCAL.x + cx * (SCALP_RX + lift),
-        HEAD_CENTER_LOCAL.y + cy * (SCALP_RY + lift),
-        HEAD_CENTER_LOCAL.z + cz * (SCALP_RZ + lift)
-      );
-    };
+    // the fade, sideburns and nape are painted (SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] uses the same cut options)
+    const cutPhi = (th: number): number => earAlignedCutPhi(th, undercutFadeCut(config));
 
-    // fade band geometry: the stubble gradient takes the lower ~45% of the top-to-cut-line height (wide on sides and back)
-    const FADE_TOP = 0.85;
-    const bandFrac = 0.45;
-    const fadeTopAt = (th: number): number => FADE_TOP + (1 - bandFrac) * (cutPhi(th) - FADE_TOP);
+    // Zone 1 (the old dark scalp shell) is gone: the scalp paint and the crop field's under layer cover the scalp, and the
+    // shell's pointed ends showed as a row of dark teeth along the front hairline.
 
-    // Zone 1: dark dense scalp shell. Over the sides and back it reaches down into the fade band (solid dark stubble above the gradient).
-    for (let tier = 0; tier < 4; tier++) {
-      const count = 30;
-      for (let i = 0; i < count; i++) {
-        const theta = (i / count) * Math.PI * 2 + tier * 0.17;
-        const cosT = Math.cos(theta);
-        const topCap = 0.98 + 0.08 * (1 - Math.abs(cosT));
-        const sideDrop = 1.08;
-        const frontKeep = THREE.MathUtils.smoothstep(cosT, 0.35, 0.75);
-        const maxPhi = Math.min(cutPhi(theta) - 0.04, THREE.MathUtils.lerp(sideDrop, topCap, frontKeep));
-        const phiStart = tier === 0 ? 0.01 : 0.22 + tier * 0.30;
-        if (phiStart >= maxPhi - 0.05) continue;
-        const pts = buildSculptedLock({
-          thetaStart: theta, thetaEnd: theta, phiStart, phiEnd: Math.min(maxPhi, phiStart + 0.8),
-          baseLift: 0.002, midArch: 0.001, tipFlickOut: 0.0, napeHug: 1.4,
-        });
-        specs.push({
-          pointsLocal: pts, width: 0.095 * wMul, thickness: 0.008, stiffnessBias: 0.99, layerAO: 0.72,
-          layerOrder: 0, isBaseShell: true, lockNormal: false, scalpRoot: 0.4,
-        });
-      }
-    }
+    // Zone 2: the short sides are painted (fadeScalpPaint with strand streaks), as games do; the top sits directly on the
+    // paint. sideLayerLocks stays available for styles whose sides are long enough to need modelled hair.
 
-    // Zone 2: stubble fade (isFadeCap): five staggered rows of overlapping narrow ribbons from the upper side down to cut line - s*band.
-    // Each ribbon is dark first, then the shader gradient dissolves it; the rows end at different heights, so the union reads as a
-    // wide, gradual fade (about 40% of the cut height) instead of a thin dithered edge.
-    {
-      const fadeCols = Math.round(130 * density);
-      const fadeRowsN = 5;
-      for (let r = 0; r < fadeRowsN; r++) {
-        const sr = r / (fadeRowsN - 1);
-        for (let i = 0; i < fadeCols; i++) {
-          const theta = (i / fadeCols) * Math.PI * 2 + r * 0.37 * (Math.PI * 2 / fadeCols) + (rS2() - 0.5) * 0.015;
-          const cosT = Math.cos(theta);
-          if (cosT > 0.88) continue; // forehead is the fringe's job
-          const cutL = cutPhi(theta);
-          const band = 0.5 * (cutL - FADE_TOP);
-          const end = cutL - sr * band + (rS2() - 0.5) * 0.03;
-          const top = FADE_TOP - 0.02 + rS2() * 0.04;
-          if (top >= end - 0.15) continue;
-          const pts = buildSculptedLock({
-            thetaStart: theta, thetaEnd: theta, phiStart: top, phiEnd: end,
-            baseLift: 0.0016 + 0.0004 * r, midArch: 0.0, tipFlickOut: 0.0, napeHug: 1.55,
-          });
-          specs.push({
-            pointsLocal: pts, width: 0.05 * wMul, thickness: 0.004, stiffnessBias: 0.99,
-            layerAO: 0.8, layerOrder: 1, isFadeCap: true, fadeStart: 0.30 + rS2() * 0.12, lockNormal: false, scalpRoot: 0.35,
-          });
-        }
-      }
-      // narrow pointed sideburns in front of each ear (opaque, tapered, tip at about mid-ear height)
-      sideburnLocks(specs, { sideburnLength: 1.5, sideburnGap: 0.08, count: 5, width: 0.016, layerOrder: 2, baseLift: 0.004, rootPhi: 1.35 });
-    }
+    // Zone 3: the top as one combed field (shared cropFieldLocks): clumps out from the crown whorl, the front hairline
+    // rising up and back, everything getting shorter and flatter down to where the painted fade takes over
+    // (the top's locks end at the line a 0.6 fade would give whatever fadeHeight is: a lower fadeHeight fills the sides with
+    // solid painted short hair up to meet the top, the head reads full from the front, and the top keeps no long overhang)
+    // (and a nape no lower than backLength 0.6 would put it: a longer back lengthens the painted fade below the top, not the top)
+    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6), backLength: Math.min(config.backLength, 0.34) }, 0); // (extent: no back blend)
+    // (an uneven front edge: hair meets the forehead along a soft wobble, not a ruled line)
+    const wob = undercutHairlineWobble(config);
+    cropFieldLocks(specs, {
+      seed: seedU + 33, wMul, sweep: sweepSign * 0.6,
+      // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
+      // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
+      hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
+      clumpSpacing: 0.11, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
+      // game look (the stylised reference): the top is chunky pointed pieces (chunks) rising from the hairline, swept up and
+      // to the side, spiky tips; the sides are the smooth painted undercut
+      // (long chunks, about hairline to crown; wide roots buried in the paint so no cut ends show; none on the side edge or
+      // across the temples, where they lay edge-on as dark blocks; the back's under layer gone so the back chunks end in
+      // their own points over the undercut)
+      // (the front stands up off the hairline and fans out, each side rising up and outward, with only a light sideways
+      // sweep: a strong sweep laid the front chunks flat across the forehead like a brim; spiky tips break the outline)
+      // (fewer, wider chunks that overlap in tiers rather than many separate strokes; short points that lift only at the
+      // tip, so no long thin streaks fly off the top; a close front row whose chunks start at uneven heights, so the
+      // front edge is a row of peaks instead of a ruled band)
+      chunks: 1, clumpCards: 1.6, chunkLength: 1.25, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.45, chunkFrontWidth: 0.65, chunkBackThin: 20,
+      chunkTip: 0.55, chunkSpikePow: 3, chunkFrontSpacing: 0.055, chunkFrontJag: 0.05,
+      // (the top's chunks lean out along their length so the top has height and its tips stand up and out, rather than
+      // lying back with only the points lifting; no twist, which turned crest chunks edge-on into thin streaks seen side on;
+      // the under layer lower and further from the edge, so it no longer pokes up as streaks or shows as dark leaves above
+      // the temples; shorter, broader chunks)
+      chunkStand: 0.045, chunkFrontStand: 0, chunkUnderHeight: 0.5, chunkUnderEdgeIn: 0.7, chunkMinLen: 0.5, chunkAspect: 0.45,
+      // (v20: no under layer under the chunks: lifted with the quiff, its paper-thin locks stood over the front row and showed
+      // side on as a tangle of dark shards over the crest; the gaps show the painted short hair. Down the back, flat,
+      // longer chunks with pointed ends, so the back lies as one combed surface tapering into the fade, not rows of scales)
+      chunkUnderKeep: 0, chunkBackFlat: 0.8,
+      flowPoleDrop: 0.3, spikeHeight: 0.03, quiff: 3.5, quiffBack: 0.25, hairlineWisps: 0,
+      // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
+      whorlRadius: 0, swirl: 0, combDown: 1,
+      length: 0.1 + 0.03 * config.crownVolume, volume: 1.2 * (0.02 + 0.016 * config.crownVolume),
+      spike: 0.6 + 0.8 * config.spikeLift, stand: 0.65 + 0.5 * config.spikeLift,
+    });
 
-    // Zone 3: slightly spiky textured top. Distinct pointed clumps of 4-6 narrow locks converging on a raised tip,
-    // clear gaps between clumps (the dark shell shows in the gaps), clump lengths and lifts varied.
-    {
-      const dxC = 0.095, dzC = 0.098;
-      for (let layer = 0; layer < 2; layer++) {
-        for (let zc = -0.26; zc <= 0.22; zc += dzC) {
-          for (let xc = -0.2; xc <= 0.2; xc += dxC) {
-            const x0 = xc + (rS3() - 0.5) * dxC * 0.8 + layer * dxC * 0.5;
-            const z0 = zc + (rS3() - 0.5) * dzC * 0.8 + layer * dzC * 0.4;
-            if ((x0 / 0.235) * (x0 / 0.235) + (z0 / 0.275) * (z0 / 0.275) > 1.0) continue;
-            const zf = THREE.MathUtils.clamp((z0 + 0.28) / 0.56, 0, 1);
-            const fwdAng = sweepSign * (0.42 + (rS3() - 0.5) * 0.6);
-            const backAng = Math.PI - sweepSign * 0.3 + (rS3() - 0.5) * 0.4;
-            let ang = zf > 0.4 ? fwdAng : THREE.MathUtils.lerp(backAng, fwdAng, smooth01(zf / 0.4));
-            ang += Math.sign(x0 || 1) * 0.55 * smooth01((Math.abs(x0) - 0.09) / 0.1);
-            const sA = Math.sin(ang), cA = Math.cos(ang);
-            const len = (layer === 0 ? 0.09 + 0.13 * zf : 0.06 + 0.07 * zf) * (0.7 + rS3() * 0.6);
-            const nL = 3 + Math.floor(rS3() * 3);
-            const tl = (0.04 + 0.03 * rS3()) * (0.8 + 0.5 * config.crownVolume) * (0.75 + 0.4 * zf) * (layer === 0 ? 1 : 0.65);
-            const zCap = 0.26 - 0.06 * Math.pow(Math.abs(x0) / 0.25, 2);
-            const tipZ = z0 + cA * len;
-            const lenK = tipZ > zCap ? Math.max(0.3, (zCap - z0) / Math.max(1e-4, cA * len)) : 1;
-            if (z0 > zCap - 0.015) continue;
-            for (let k = 0; k < nL; k++) {
-              const off = (k - (nL - 1) / 2) / Math.max(1, nL - 1) * 0.06 + (rS3() - 0.5) * 0.006;
-              const rx = x0 + cA * off - sA * 0.02 * rS3();
-              const rz = z0 - sA * off - cA * 0.02 * rS3();
-              const mid = 1 - 0.3 * Math.abs(off) / 0.025; // central locks reach furthest, so the clump ends in a point
-              const tx = x0 + sA * len * lenK * mid + cA * off * 0.15;
-              const tz = z0 + cA * len * lenK * mid - sA * off * 0.15;
-              const pts: THREE.Vector3[] = [];
-              for (let n = 0; n < NODES_PER_LOCK; n++) {
-                const t = n / (NODES_PER_LOCK - 1);
-                const lift = 0.008 + tl * Math.pow(t, 1.9) + 0.008 * Math.pow(t, 6);
-                pts.push(domePt(THREE.MathUtils.lerp(rx, tx, t), THREE.MathUtils.lerp(rz, tz, t), lift));
-              }
-              specs.push({ pointsLocal: pts, width: (0.038 + rS3() * 0.014) * wMul, thickness: 0.009, stiffnessBias: 0.96, layerAO: 0.78 + rS3() * 0.22, layerOrder: layer === 0 ? 3 : 2, smooth: 2, roundness: 0.4, lockNormal: false, scalpRoot: 0.45 });
-            }
-          }
-        }
-      }
-    }
-
-    // Zone 4: short choppy asymmetric fringe: clumps of pointed locks swept toward the sweep side,
-    // hanging lower on the sweep side, receding on the far side.
-    {
-      const nClumps = 11;
-      for (let c = 0; c < nClumps; c++) {
-        const f = (c + (rS4() - 0.5) * 0.6) / (nClumps - 1);
-        const th0 = (f - 0.5) * 1.75 - sweepSign * 0.16;
-        const side = sweepSign * (f - 0.5); // -0.5 far side .. +0.5 sweep side
-        const endBase = frontHairline + 0.14 + config.bangsLength * 0.08 + (side > 0 ? side * 0.16 : side * 0.04) + (rS4() - 0.5) * 0.08;
-        const sweepTh = sweepSign * (0.25 + 0.2 * rS4());
-        const perC = 4;
-        for (let k = 0; k < perC; k++) {
-          const kk = k - (perC - 1) / 2;
-          const th = th0 + kk * 0.04 + (rS4() - 0.5) * 0.01;
-          const tipShort = Math.abs(kk) * 0.05 + (rS4() - 0.5) * 0.02;
-          const pts = buildSculptedLock({
-            thetaStart: th - sweepSign * 0.2, thetaEnd: th + sweepTh, phiStart: 0.5 + rS4() * 0.15,
-            phiEnd: endBase - tipShort,
-            baseLift: 0.04 + config.crownVolume * 0.03, midArch: 0.02, tipFlickOut: 0.02 + rS4() * 0.016, napeHug: 1.15,
-          });
-          specs.push({
-            pointsLocal: pts, width: (0.03 + rS4() * 0.008) * wMul, thickness: 0.011, stiffnessBias: 0.9,
-            layerAO: 0.92, layerOrder: 4, lockNormal: false, scalpRoot: 0.3,
-          });
-        }
-      }
-      // sparse fine strands between the clumps to soften the edge
-      for (let i = 0; i < 12; i++) {
-        const f = rS5();
-        const th = (f - 0.5) * 1.7;
-        const side = sweepSign * (f - 0.5);
-        const pts = buildSculptedLock({
-          thetaStart: th - sweepSign * 0.15, thetaEnd: th + sweepSign * 0.3, phiStart: 0.55 + rS5() * 0.1,
-          phiEnd: frontHairline - 0.02 + config.bangsLength * 0.08 + (side > 0 ? side * 0.1 : side * 0.05) + (rS5() - 0.5) * 0.1,
-          baseLift: 0.015, midArch: 0.008, tipFlickOut: 0.01, napeHug: 1.15,
-        });
-        specs.push({ pointsLocal: pts, width: 0.012 * wMul, thickness: 0.008, stiffnessBias: 0.9, layerAO: 0.94, layerOrder: 4, lockNormal: false, scalpRoot: 0.3 });
-      }
-    }
+    // The front edge is the textured top meeting the painted hairline (forehead clear, tips lifted), as in the reference.
 
     return specs;
   }
@@ -3773,7 +4780,7 @@ if (arch === 'twin-buns') {
           clearOfBody(p, 0.006 + L.ord * 0.003);
         }
         specs.push({
-          smooth: 3, roundness: 0.65, pointsLocal: pts, width: L.w * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+          smooth: 3, roundness: 0.65, tipStart: 0.66, tipWidth: 0.12, pointsLocal: pts, width: L.w * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
           stiffnessBias: 0.78, layerAO: 0.8 + L.ord * 0.05, layerOrder: L.ord, lockNormal: false, scalpRoot: 0.4,
         });
       }
@@ -3788,7 +4795,7 @@ if (arch === 'twin-buns') {
         const n = Math.round(46 * density);
         for (let i = 0; i < n; i++) {
           const f = (i + row * 0.33 + (cpRand() - 0.5) * 0.3) / (n - 1);
-          const b0 = THREE.MathUtils.lerp(-0.65, 1.25, THREE.MathUtils.clamp(f, 0, 1));
+          const b0 = THREE.MathUtils.lerp(-0.65, 1.31, THREE.MathUtils.clamp(f, 0, 1));
           const ff = _ss((b0 - 0.55) / 0.6); // 1 at the hairline (curtain), 0 at the crown
           const ffc = _ss((b0 - 0.92) / 0.3); // front-most: the curtain wings that arch over the forehead corners
           const aR = THREE.MathUtils.lerp(THREE.MathUtils.lerp(1.24, 0.9, ff), 0.74 + row * 0.04, ffc) + (cpRand() - 0.5) * 0.06;
@@ -3802,10 +4809,10 @@ if (arch === 'twin-buns') {
           const endY = THREE.MathUtils.lerp(sideY, curtainY, ff) + row * 0.02 * (1 - ff) + (cpRand() - 0.5) * jag * (1 - 0.5 * ff);
           const out = new THREE.Vector3(rel.x - HEAD_CENTER_LOCAL.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize().lerp(new THREE.Vector3(sd, 0, 0), ffc * 0.5).normalize();
           gravityFall(pts, 5, Math.max(0.04, (rel.y - endY) * (1.06 + ffc * 0.1)), {
-            out, flare: 0.05 + 0.05 * ff + 0.04 * ffc, bend: 0.42, margin: 0.008 + row * 0.006 + ffc * 0.01, flick: 0.01 * ff + 0.004,
+            out, flare: 0.03 + 0.025 * ff + 0.02 * ffc, bend: 0.42, margin: 0.008 + row * 0.006 + ffc * 0.01, flick: 0.01 * ff + 0.004,
           });
           specs.push({
-            smooth: 3, roundness: 0.65, pointsLocal: pts, width: (0.034 - row * 0.002) * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
+            smooth: 3, roundness: 0.65, tipStart: 0.68, tipWidth: 0.12, pointsLocal: pts, width: (0.034 - row * 0.002) * wMul * (0.85 + cpRand() * 0.3), thickness: 0.012,
             stiffnessBias: 0.8, layerAO: 0.84 + row * 0.05, layerOrder: 4 + row, lockNormal: false, scalpRoot: 0.42,
           });
         }
@@ -3826,7 +4833,7 @@ if (arch === 'twin-buns') {
         const out = new THREE.Vector3(rel.x, 0, rel.z - HEAD_CENTER_LOCAL.z).normalize();
         gravityFall(pts, 6, Math.max(0.04, rel.y - (sideY + 0.04 + (cpRand() - 0.5) * jag)), { out, flare: 0.04, bend: 0.5, margin: 0.01 });
         specs.push({
-          smooth: 3, roundness: 0.6, pointsLocal: pts, width: 0.04 * wMul, thickness: 0.011,
+          smooth: 3, roundness: 0.6, tipStart: 0.66, tipWidth: 0.12, pointsLocal: pts, width: 0.04 * wMul, thickness: 0.011,
           stiffnessBias: 0.8, layerAO: 0.8, layerOrder: 2, lockNormal: false, scalpRoot: 0.4,
         });
       }

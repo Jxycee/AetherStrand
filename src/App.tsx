@@ -1,6 +1,6 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import JSZip from 'jszip';
-import { Columns2, Download, ImagePlus, Layers, X } from 'lucide-react';
+import { Columns2, Download, ImagePlus, Layers, User, X } from 'lucide-react';
 import { BottomControlDock } from './components/BottomControlDock';
 import { CaptureOptions, HairViewport, HairViewportHandle } from './components/HairViewport';
 import { PluginStudioPanel } from './components/PluginStudioPanel';
@@ -12,6 +12,7 @@ import {
   pickRandomPalette,
 } from './engine/hairBuilder';
 import { buildExportLocksForBlender, HairSimulationStats } from './engine/hairPhysics';
+import { CharacterHead, loadCharacterHead } from './engine/characterHead';
 import { canvasToPngBlob, HairTexturePack } from './engine/hairTextures';
 import {
   generatePluginFiles,
@@ -26,6 +27,7 @@ import {
   HAIR_PRESETS,
   HairBuilderArchetype,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -144,6 +146,24 @@ export default function App() {
   const viewportRef = useRef<HairViewportHandle>(null);
 
   const [view, setView] = useState<WorkspaceView>('viewport');
+  // Character head shown in place of the mannequin (OBJ, fitted like the Unity plugin's head fit)
+  const [characterHead, setCharacterHead] = useState<CharacterHead | null>(null);
+  // the shape shell grid shown over the hair while the shell editor is open (follows a drag before the hair rebuilds)
+  const [shellPreview, setShellPreview] = useState<HairShellGrid | null>(null);
+  const headInputRef = useRef<HTMLInputElement>(null);
+  const handleHeadFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      // Optional "chinY=<metres>" in the file name, e.g. Tobin_Head_chinY=1.5855.obj, overrides chin detection
+      const m = /chinY=(\d+(?:\.\d+)?)/.exec(file.name);
+      setCharacterHead(loadCharacterHead(text, file.name.replace(/\.obj$/i, ''), m ? Number(m[1]) : undefined));
+    } catch (err) {
+      console.error('[AetherStrand] could not load head OBJ', err);
+    }
+  }, []);
   const [dockCollapsed, setDockCollapsed] = useState(false);
 
   const [presetId, setPresetId] = useState<HairPresetId>(
@@ -151,6 +171,13 @@ export default function App() {
   );
   const [builderConfig, setBuilderConfig] = useState<HairBuilderConfig | null>(
     initialRandom ? initialRandom.builder : null
+  );
+  // What the hair is built from: the style plus, while a character head is loaded, that head's measured ear landmarks, so
+  // sideburns, the ear arch and the fade line sit on this head's ears. It is also what Copy JSON and the exports carry, so
+  // the Unity export is built for the same ears.
+  const buildConfig = useMemo<HairBuilderConfig | null>(
+    () => (builderConfig && characterHead ? { ...builderConfig, earLandmarks: characterHead.landmarks } : builderConfig),
+    [builderConfig, characterHead]
   );
   const [customStyleName, setCustomStyleName] = useState<string | null>(
     initialRandom ? initialRandom.name : null
@@ -297,7 +324,7 @@ export default function App() {
       schemaVersion: '2.0',
       presetId,
       customName: customStyleName ?? undefined,
-      builder: builderConfig ?? undefined,
+      builder: buildConfig ?? undefined,
       pipeline,
       lightingPreset,
       motionMode,
@@ -309,7 +336,7 @@ export default function App() {
   }, [
     presetId,
     customStyleName,
-    builderConfig,
+    buildConfig,
     pipeline,
     lightingPreset,
     motionMode,
@@ -529,8 +556,8 @@ export default function App() {
   const previewExportLocks = useMemo(() => {
     const liveLocks = viewportRef.current?.getExportLockGeometry();
     if (liveLocks && liveLocks.length > 0) return liveLocks;
-    return buildExportLocksForBlender(presetId, builderConfig, physicsConfig.strandWidthScale);
-  }, [presetId, builderConfig, physicsConfig.strandWidthScale, simStats]);
+    return buildExportLocksForBlender(presetId, buildConfig, physicsConfig.strandWidthScale);
+  }, [presetId, buildConfig, physicsConfig.strandWidthScale, simStats]);
 
   const pluginFiles = useMemo(
     () => generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, previewExportLocks),
@@ -547,7 +574,7 @@ export default function App() {
       const activeLocks =
         liveLocks && liveLocks.length > 0
           ? liveLocks
-          : buildExportLocksForBlender(presetId, builderConfig, physicsConfig.strandWidthScale);
+          : buildExportLocksForBlender(presetId, buildConfig, physicsConfig.strandWidthScale);
       const exportFiles = generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, activeLocks);
 
       for (const file of exportFiles) {
@@ -596,7 +623,7 @@ export default function App() {
     }
   }, [
     exporting,
-    builderConfig,
+    buildConfig,
     presetId,
     pipeline,
     shaderConfig,
@@ -623,7 +650,7 @@ export default function App() {
             <HairViewport
               ref={viewportRef}
               presetId={presetId}
-              builderConfig={builderConfig}
+              builderConfig={buildConfig}
               shaderConfig={shaderConfig}
               physicsConfig={physicsConfig}
               motionMode={motionMode}
@@ -689,7 +716,17 @@ export default function App() {
           })}
         </nav>
 
-        <div className="flex items-center shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <input ref={headInputRef} type="file" accept=".obj" className="hidden" onChange={handleHeadFile} />
+          <button
+            type="button"
+            onClick={() => (characterHead ? setCharacterHead(null) : headInputRef.current?.click())}
+            title={characterHead ? `Showing ${characterHead.name}. Click to go back to the mannequin.` : 'Load your character head (.obj) to preview hair on it as Unity fits it'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-white/15 text-xs font-medium text-slate-200 hover:bg-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <User className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{characterHead ? 'Mannequin' : 'Load head'}</span>
+          </button>
           <button
             type="button"
             onClick={handleExportZip}
@@ -708,7 +745,7 @@ export default function App() {
         <HairViewport
           ref={viewportRef}
           presetId={presetId}
-          builderConfig={builderConfig}
+          builderConfig={buildConfig}
           shaderConfig={shaderConfig}
           physicsConfig={physicsConfig}
           motionMode={motionMode}
@@ -717,6 +754,8 @@ export default function App() {
           cameraRequestNonce={cameraRequestNonce}
           visionMode={visionMode}
           backdropMode={backdropMode}
+          characterHead={characterHead}
+          shellOverlay={view === 'viewport' ? shellPreview : null}
           paused={view !== 'viewport' || turnaroundCaptureUrl !== null}
           onStatsChange={setSimStats}
           onAuditChange={setQualityAudit}
@@ -757,6 +796,8 @@ export default function App() {
           presetId={presetId}
           onSelectPreset={handleSelectPreset}
           builderConfig={builderConfig}
+          buildConfig={buildConfig}
+          onShellPreview={setShellPreview}
           customStyleName={customStyleName}
           onChangeBuilder={handleChangeBuilder}
           onRandomizeStyle={() => handleRandomizeStyle()}

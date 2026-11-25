@@ -93,6 +93,128 @@ namespace AetherStrand
         }
     }
 
+    /// <summary>
+    /// Scalp paint from PresetGeometry.json ("scalpPaint", written by the web generator; see src/engine/scalpPaint.ts):
+    /// the painted short-hair layer under the locks (fades, sideburn stubble, scalp under thin or parted hair).
+    /// Curves are sampled over signed web azimuth [-pi, pi) (0 = front, + = web +X) in web scalp coordinates.
+    /// </summary>
+    public sealed class ScalpPaintData
+    {
+        public int bins;
+        public double[] fullPhi, edgePhi, edgeDensity;
+        public double feather = 0.035, density = 1.0, grain = 0.5;
+        /// <summary>0..1 hairline unevenness (HairlineJag). Default 0.5.</summary>
+        public double irregularity = 0.5;
+        /// <summary>0..1 darkening of the paint under the hair (paintUnderShade in scalpPaint.ts). Default 0.</summary>
+        public double underShade = 0.0;
+        /// <summary>>= 1: grain cells stretched along phi (grainStretch in scalpPaint.ts). Default 1.</summary>
+        public double grainStretch = 1.0;
+        /// <summary>Optional colour override ('#rrggbb' in the JSON); null = the hair's own colour (see AetherStrandScalpPaint).</summary>
+        public string color;
+
+        // web scalp ellipsoid (HEAD_CENTER_LOCAL, SCALP_RX/RY/RZ), head-pivot-local
+        public const double CX = 0.0, CY = 0.425, CZ = -0.01, RX = 0.282, RY = 0.318, RZ = 0.31;
+
+        double Sample(double[] a, double az)
+        {
+            int n = a.Length;
+            double f = (az + Math.PI) / (Math.PI * 2.0) * n - 0.5;
+            int i0 = (int)Math.Floor(f);
+            double t = f - i0;
+            double v0 = a[((i0 % n) + n) % n], v1 = a[(((i0 + 1) % n) + n) % n];
+            return v0 + (v1 - v0) * t;
+        }
+
+        /// <summary>Mirrors paintHash in scalpPaint.ts (and h11 in the ScalpPaint shader).</summary>
+        public static double PaintHash(double i)
+        {
+            double t = i * 0.1031; t -= Math.Floor(t);
+            t *= t + 33.33; t *= t + t; return t - Math.Floor(t);
+        }
+
+        static double VNoise(double az, int cells)
+        {
+            double x = (az + Math.PI) / (Math.PI * 2.0) * cells;
+            double i = Math.Floor(x), f = x - i;
+            int ii = (int)i;
+            double a = PaintHash(((ii % cells) + cells) % cells), b = PaintHash((((ii + 1) % cells) + cells) % cells);
+            return a + (b - a) * f * f * (3.0 - 2.0 * f);
+        }
+
+        /// <summary>Hairline wobble (rad) at azimuth az (hairlineJag in scalpPaint.ts).</summary>
+        public static double HairlineJag(double irregularity, double az)
+        {
+            if (irregularity <= 0.0) return 0.0;
+            return irregularity * (0.024 * (VNoise(az, 150) - 0.5) * 2.0 + 0.011 * (VNoise(az, 440) - 0.5) * 2.0);
+        }
+
+        static double Ss(double x) { double c = Math.Max(0.0, Math.Min(1.0, x)); return c * c * (3.0 - 2.0 * c); }
+
+        /// <summary>Density 0..1 at a WEB head-pivot-local point (x not mirrored).</summary>
+        public double EvalWeb(double x, double y, double z)
+        {
+            double dx = (x - CX) / RX, dy = (y - CY) / RY, dz = (z - CZ) / RZ;
+            double r = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (r < 1e-9) return 0.0;
+            double az = Math.Atan2(dx, dz);
+            double phi = Math.Acos(Math.Max(-1.0, Math.Min(1.0, dy / r))) - HairlineJag(irregularity, az);
+            double full = Sample(fullPhi, az), edge = Math.Max(full + 1e-4, Sample(edgePhi, az)), ed = Sample(edgeDensity, az);
+            return PaintRamp(phi, full, edge, ed, feather) * density;
+        }
+
+        /// <summary>Mirrors paintRamp in src/engine/scalpPaint.ts: one smooth monotone curve 1 -> ed (at edge) -> 0 (at edge + feather), no plateau at ed.</summary>
+        public static double PaintRamp(double phi, double full, double edge, double ed, double feather)
+        {
+            if (phi <= full) return 1.0;
+            double x2 = edge + Math.Max(1e-4, feather);
+            if (phi >= x2) return 0.0;
+            double h0 = Math.Max(1e-4, edge - full), h1 = x2 - edge;
+            double s0 = (ed - 1.0) / h0, s1 = -ed / h1;
+            double m1 = (s0 < 0.0 && s1 < 0.0) ? 2.0 * s0 * s1 / (s0 + s1) : 0.0;
+            double t, ya, yb, ma, mb, h;
+            if (phi <= edge) { t = (phi - full) / h0; ya = 1.0; yb = ed; ma = 0.0; mb = m1; h = h0; }
+            else { t = (phi - edge) / h1; ya = ed; yb = 0.0; ma = m1; mb = 0.0; h = h1; }
+            double t2 = t * t, t3 = t2 * t;
+            double v = (2.0 * t3 - 3.0 * t2 + 1.0) * ya + (t3 - 2.0 * t2 + t) * h * ma + (-2.0 * t3 + 3.0 * t2) * yb + (t3 - t2) * h * mb;
+            return Math.Max(0.0, Math.Min(1.0, v));
+        }
+
+        /// <summary>Like EvalWeb but with the cut line pushed down by pad radians (used to pick which skin triangles the shell needs).</summary>
+        public double EvalWebPadded(double x, double y, double z, double pad)
+        {
+            double dx = (x - CX) / RX, dy = (y - CY) / RY, dz = (z - CZ) / RZ;
+            double r = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (r < 1e-9) return 0.0;
+            double az = Math.Atan2(dx, dz);
+            double phi = Math.Acos(Math.Max(-1.0, Math.Min(1.0, dy / r)));
+            return phi <= Math.Max(Sample(fullPhi, az), Sample(edgePhi, az)) + feather + pad + 0.04 * irregularity ? 1.0 : 0.0;
+        }
+
+        /// <summary>Reads "scalpPaint" from a PresetGeometry.json; null if absent.</summary>
+        public static ScalpPaintData Load(string geometryJson)
+        {
+            var root = (Dictionary<string, object>)AetherStrandJson.Parse(geometryJson);
+            if (!AetherStrandJson.Has(root, "scalpPaint")) return null;
+            var d = (Dictionary<string, object>)root["scalpPaint"];
+            var p = new ScalpPaintData
+            {
+                fullPhi = AetherStrandJson.Arr(d["fullPhi"]),
+                edgePhi = AetherStrandJson.Arr(d["edgePhi"]),
+                edgeDensity = AetherStrandJson.Arr(d["edgeDensity"]),
+                feather = AetherStrandJson.D(d, "feather", 0.035),
+                density = AetherStrandJson.D(d, "density", 1.0),
+                grain = AetherStrandJson.D(d, "grain", 0.5),
+                irregularity = AetherStrandJson.D(d, "irregularity", 0.5),
+                underShade = AetherStrandJson.D(d, "underShade", 0.0),
+                grainStretch = AetherStrandJson.D(d, "grainStretch", 1.0),
+                color = d.ContainsKey("color") ? d["color"] as string : null,
+            };
+            p.bins = p.fullPhi.Length;
+            if (p.bins < 2 || p.edgePhi.Length != p.bins || p.edgeDensity.Length != p.bins) return null;
+            return p;
+        }
+    }
+
     /// <summary>Loads PresetGeometry.json (plugin format, Blender Z-up coordinates) and recipe physics blocks for the web solver.</summary>
     public static class AetherStrandWebData
     {
@@ -128,6 +250,7 @@ namespace AetherStrand
                 ld.scalpRoot = AetherStrandJson.D(d, "scalpRoot", 0.65);
                 ld.isBaseShell = AetherStrandJson.B(d, "isBaseShell", false);
                 ld.lockNormal = AetherStrandJson.B(d, "lockNormal", false);
+                ld.rigid = AetherStrandJson.B(d, "rigid", false);
                 ld.isFadeCap = AetherStrandJson.B(d, "isFadeCap", false);
                 ld.fadeStart = AetherStrandJson.D(d, "fadeStart", double.NaN);
                 ld.smooth = System.Math.Max(1, System.Math.Min(4, (int)System.Math.Round(AetherStrandJson.D(d, "smooth", 1.0))));
@@ -136,6 +259,15 @@ namespace AetherStrand
                 ld.tipWidth = System.Math.Max(0.0, System.Math.Min(0.9, AetherStrandJson.D(d, "tipWidth", 0.0)));
                 ld.ripple = System.Math.Max(0.0, System.Math.Min(0.45, AetherStrandJson.D(d, "ripple", 0.0)));
                 ld.rippleFreq = System.Math.Max(1.0, AetherStrandJson.D(d, "rippleFreq", 9.0));
+                ld.colorFrom = AetherStrandJson.D(d, "colorFrom", double.NaN);
+                ld.colorTo = AetherStrandJson.D(d, "colorTo", double.NaN);
+                ld.surfaceShine = System.Math.Max(0.0, System.Math.Min(1.0, AetherStrandJson.D(d, "surfaceShine", 0.0)));
+                ld.rootWidth = AetherStrandJson.Has(d, "rootWidth") ? System.Math.Max(0.05, System.Math.Min(1.0, AetherStrandJson.D(d, "rootWidth", 0.36))) : double.NaN;
+                if (AetherStrandJson.Has(d, "shadeDir"))
+                {
+                    double[] sd = AetherStrandJson.Arr(d["shadeDir"]);
+                    ld.shadeDir = new[] { sd[0], sd[2], -sd[1] };
+                }
                 if (AetherStrandJson.Has(d, "rootNormal"))
                 {
                     double[] rn = AetherStrandJson.Arr(d["rootNormal"]);
