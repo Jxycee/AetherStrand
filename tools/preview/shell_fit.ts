@@ -1,6 +1,6 @@
 // Fits a style's hair shell (hairShell.ts) to a reference outline: renders, measures how far each shell cell's hair edge
 // sits from the reference outline (cpu_preview --shell-gaps), moves the cells by most of that, and repeats. Keeps the
-// grid with the best outline score and writes it, ready to paste into the recipe as builder.shell (or pass with --shell).
+// grid with the best outline score and writes it (each round's grid stays beside its render as <out>_fit_shell_<n>.json), ready to paste into the recipe as builder.shell (or pass with --shell).
 //
 // Usage (repo root), with the same render flags as cpu_preview (a --ref sheet and --head are required):
 //   npx tsx tools/preview/shell_fit.ts --recipe tools/hair-blocks/recipes/ref_undercut-fade.json \
@@ -45,11 +45,15 @@ else {
 }
 let best = { score: -1, grid: cur, iter: -1 };
 for (let it = 0; it <= iters; it++) {
-  fs.writeFileSync(`${work}_shell.json`, hairShellJson(cur));
-  const res = run(['--shell', `${work}_shell.json`, '--shell-gaps', `${work}_gaps.json`, '--out', `${work}_${it}.png`]);
+  // (each round's grid is kept next to its render, so a round that looks better than the best-scoring one can be used)
+  fs.writeFileSync(`${work}_shell_${it}.json`, hairShellJson(cur));
+  const res = run(['--shell', `${work}_shell_${it}.json`, '--shell-gaps', `${work}_gaps.json`, '--out', `${work}_${it}.png`]);
   const gaps: HairShellGrid = JSON.parse(fs.readFileSync(`${work}_gaps.json`, 'utf8'));
   console.error(`round ${it}: outline ${res.outlineScore} (${Object.entries(res.outline).map(([k, v]) => `${k} ${v.iou}`).join(', ')})`);
-  if (res.outlineScore > best.score) best = { score: res.outlineScore, grid: JSON.parse(JSON.stringify(cur)), iter: it };
+  // (compare the unrounded mean of the views' overlaps: outlineScore is a whole number, so small gains would tie)
+  const ious = Object.values(res.outline).map((v) => v.iou);
+  const score = ious.reduce((a, b) => a + b, 0) / Math.max(1, ious.length);
+  if (score > best.score) best = { score, grid: JSON.parse(JSON.stringify(cur)), iter: it };
   if (it === iters) break;
   // move each cell by damp x its gap (lightly smoothed with its neighbours' gaps), at most maxStep mm per round
   const g = gaps.mm;
@@ -66,4 +70,4 @@ for (let it = 0; it <= iters; it++) {
 const save = arg('--save', `${work}_best.json`)!;
 fs.writeFileSync(save, hairShellJson(best.grid));
 console.error(formatHairShell(best.grid, 'best mm'));
-console.log(JSON.stringify({ bestScore: best.score, bestRound: best.iter, shell: save, render: `${work}_${best.iter}.png`, outline: `${work}_${best.iter}_outline.png` }));
+console.log(JSON.stringify({ bestScore: Math.round(best.score * 1000) / 10, bestRound: best.iter, shell: save, render: `${work}_${best.iter}.png`, outline: `${work}_${best.iter}_outline.png` }));

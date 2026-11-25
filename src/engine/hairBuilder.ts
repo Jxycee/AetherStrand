@@ -179,6 +179,9 @@ export interface EarCutOptions {
   sideburnGap?: number;
   /** Azimuth span (rad) of the pointed descent from the temple to the sideburn tip. Default 0.40. */
   sideburnTaper?: number;
+  /** Shape of that descent: above 1 the hairline holds and drops late (a long diagonal over the temple), below 1 it drops
+   * early and runs down in front of the ear (temple covered, near-vertical sideburn edge). Default 1.8. */
+  sideburnCurve?: number;
   /** phi clearance kept above the ear top by the arch. Default 0.07. */
   earClearance?: number;
   /** phi of the cut at the nape centre (theta = pi). Default 2.10. */
@@ -219,7 +222,7 @@ export function earAlignedCutPhi(theta: number, o: EarCutOptions = {}): number {
   const rise = 0.07;
   const eb = EAR_BACK_THETA + 0.03;
   if (a <= a0) return temple(a);
-  if (a <= tip.theta) return THREE.MathUtils.lerp(temple(a0), tip.phi, Math.pow((a - a0) / taper, 1.8));
+  if (a <= tip.theta) return THREE.MathUtils.lerp(temple(a0), tip.phi, Math.pow((a - a0) / taper, o.sideburnCurve ?? 1.8));
   if (a <= tip.theta + rise) return THREE.MathUtils.lerp(tip.phi, arch(tip.theta + rise), _ss((a - tip.theta) / rise));
   if (a <= eb) return arch(a);
   const behind = o.behindEarPhi ?? arch(eb) + 0.10;
@@ -1066,7 +1069,7 @@ export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx
 /** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
 export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
   return {
-    hairlinePhi: roundedHairline(1.1, 0.07, 0.75), templeRecede: 0.1, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.5,
+    hairlinePhi: roundedHairline(0.98, 0.03, 0.75), templeRecede: 0.08, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.45, sideburnCurve: 0.6, sideburnGap: 0.03,
     earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.4, config.backLength), napeCurve: 0.8,
   };
 }

@@ -61,7 +61,10 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 `fadeScalpPaint(options)` in hairBuilder.ts paints a barber fade or taper for any short-sided style:
 
 - solid side hair, then a gradient to `stubble` at the ear-aligned cut line;
-- a pointed sideburn in front of the ear, an arch over the ear and a curved nape (`earAlignedCutPhi`);
+- a pointed sideburn in front of the ear, an arch over the ear and a curved nape (`earAlignedCutPhi`). The temple-to-
+  sideburn descent spans `sideburnTaper` (rad of azimuth) with the shape `sideburnCurve`: the default 1.8 holds the
+  hairline and drops late (a long diagonal over the temple), below 1 (the undercut uses 0.6) it drops early, so the temple
+  is covered and the sideburn edge runs down in front of the ear. `sideburnGap` sets how far in front of the ear it sits;
 - no fade on the front hairline (`frontBlend`, rad, default 0, instead thins the paint over a band behind the forehead
   hairline, so the front edge is a soft gradient and not a dark painted brim).
 
@@ -309,8 +312,10 @@ Workflow:
    refs/style_views.json --iters 6 --save fitted.json --out fit.png`. Each round renders, reads `--shell-gaps` (for each
    cell on a view's rim, where the rendered hair edge ends against where the reference hair ends, along the cell's
    outward direction on screen) and moves cells by 70% of their gap, at most 12 mm a round, never below 2 mm. It keeps
-   the round with the best outline score. Options: `--damp`, `--step`, `--rows 15,30,45` (only those rows move),
-   `--shell start.json`. Always look at the best round's render: the fit only reads the outline.
+   the round with the best mean overlap (unrounded, so small gains don't tie). Options: `--damp`, `--step`, `--rows 15,30,45` (only those rows move),
+   `--shell start.json`. Always look at the best round's render: the fit only reads the outline. Later rounds can score higher by
+   building a ledge over the forehead to reach a stylised reference's spikes (seen on the undercut v14), so compare the
+   rounds' renders and pick by eye (each round's grid is saved beside its render as `<out>_fit_shell_<n>.json`).
 
 What it can't fix: the hairline, the fade and anything painted on the scalp (those are scalp paint), and hair that isn't
 there. On the undercut v13 the fit took the outline score from 72 to 74 (top and quiff front in profile); what is left
