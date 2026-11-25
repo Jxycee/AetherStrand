@@ -16,20 +16,26 @@ namespace AetherStrand
 
         static readonly int HeadCenterId = Shader.PropertyToID("_HeadCenterWS");
         MaterialPropertyBlock _mpb;
+        readonly System.Collections.Generic.List<Renderer> _rs = new System.Collections.Generic.List<Renderer>();
 
         void OnEnable() { Apply(); }
         void LateUpdate() { Apply(); }
 
+        /// <summary>Writes the head centre to target, or with no target to every renderer on this object and its children
+        /// (the live hair's locks and its hybrid mass child both shade with it).</summary>
         public void Apply()
         {
             if (headBone == null) return;
-            var r = target != null ? target : GetComponent<Renderer>();
-            if (r == null) return;
             if (_mpb == null) _mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(_mpb);
             Vector3 w = headBone.TransformPoint(localCenter);
-            _mpb.SetVector(HeadCenterId, new Vector4(w.x, w.y, w.z, 0f));
-            r.SetPropertyBlock(_mpb);
+            _rs.Clear();
+            if (target != null) _rs.Add(target); else GetComponentsInChildren(true, _rs);
+            foreach (var r in _rs)
+            {
+                r.GetPropertyBlock(_mpb);
+                _mpb.SetVector(HeadCenterId, new Vector4(w.x, w.y, w.z, 0f));
+                r.SetPropertyBlock(_mpb);
+            }
         }
     }
 }

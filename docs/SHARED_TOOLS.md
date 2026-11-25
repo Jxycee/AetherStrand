@@ -593,3 +593,30 @@ deforms and draws.
   in AetherStrand_Hair.shader). Strand cards are also rigid: short hair barely moves.
 - In Unity the mass needs the live web solver (`AetherStrandWebImport.ApplyLive`, component `AetherStrandWebHair`), which
   adds a child `AetherStrand_Mass` with the hair material. The baked-mesh path (`Apply`) ignores the block.
+- Alpha to coverage: the hair material's **Alpha To Coverage** toggle (`_AlphaToMask`, keyword `_ALPHA_TO_COVERAGE`) turns
+  the tip and strand-card cut-outs into a sharpened coverage that MSAA resolves into smooth fine tips without TAA. It needs
+  MSAA on, and set Tip Dither to 0. Fade-cap dither and the shadow and depth passes still clip. With TAA instead, leave it off
+  and use Tip Dither 1.
+- `AetherStrandWebHair.manualStep` + `Tick(dt)` step the live hair by hand (test harnesses, scrubbing). The head-centre
+  driver now writes `_HeadCenterWS` to every renderer under the hair, the mass included.
+
+### Hybrid proof scene (Unity, PC)
+
+`tools/parity/HybridProofTest.cs` (Editor folder) builds Tobin with today's mage and the hybrid mage through `ApplyLive`,
+the web studio rig, and plays `tools/parity/runtime/HybridProofRunner.cs` (non-Editor folder, with `HybridOverdraw.shader`).
+For 1080p and 1440p, MSAA 4x + A2C and clip + dither + TAA, close and mid camera, it runs one recorded path (the web turn
+motion and a slow orbit, `cam_path.json`) with no hair, today's hair and the hybrid, and writes `summary.md` (GPU frame time,
+hair cost, overdraw, shimmer, CPU solver time), stills, overdraw heat maps, one-second frame sequences and the four parity
+views (`sheet_baseline.png`, `sheet_hybrid.png`).
+
+```
+npx tsx tools/unity-parity/web_export.ts tools/hair-blocks/recipes/loop_messy-mage.json <out>/mage_base
+npx tsx tools/unity-parity/web_export.ts tools/hair-blocks/recipes/loop_messy-mage.json <out>/mage_hybrid --mass --edge-cards 24
+SC_HP_BASE_GEO=<out>/mage_base/PresetGeometry.json SC_HP_HYB_GEO=<out>/mage_hybrid/PresetGeometry.json \
+SC_HP_RECIPE=tools/hair-blocks/recipes/loop_messy-mage.json SC_PARITY_RIG=<rig_studio.json> SC_PARITY_OUT=<results> \
+Unity -batchmode -projectPath <game> -executeMethod HybridProofTest.Run     # no -quit, no -nographics
+ffmpeg -framerate 60 -i <results>/seq/<run>/%03d.jpg -c:v libx264 -crf 16 -pix_fmt yuv420p <run>.mp4   # to judge shimmer
+```
+
+In the editor: Tools > AetherStrand > Parity > Hybrid Proof. `TobinFitTest` now builds the scalp paint too
+(`SC_TOBIN_PAINT=0` skips it), so short and faded sides render as they ship (AET-15).

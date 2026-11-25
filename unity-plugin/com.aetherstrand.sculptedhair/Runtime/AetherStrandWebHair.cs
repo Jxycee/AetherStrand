@@ -34,6 +34,8 @@ namespace AetherStrand
         public Vector3 fitOffset = Vector3.zero;
         [Tooltip("Simulate at the web's 60 Hz (deterministic); false = one variable step per frame (web live mode).")]
         public bool fixedTimestep = true;
+        [Tooltip("Off: the hair steps itself every frame. On: it only moves when Tick is called (test harnesses, cutscene scrubbing).")]
+        public bool manualStep = false;
 
         AetherStrandWebSolver solver;
         AetherStrandWebMesh meshBuilder;
@@ -71,6 +73,7 @@ namespace AetherStrand
             if (fitBone != null) { meshBuilder.useFit = true; meshBuilder.fitScale = fitScale; meshBuilder.fitOffset = fitOffset; }
             // hybrid inner mass: built by the web generator, deformed here from the same solver
             var mass = AetherStrandWebMass.Load((System.Collections.Generic.Dictionary<string, object>)AetherStrandJson.Parse(geometryJson.text));
+            if (massObject == null) { var stale = transform.Find("AetherStrand_Mass"); if (stale != null) massObject = stale.gameObject; } // saved with the scene
             if (massObject != null) { if (Application.isPlaying) Destroy(massObject); else DestroyImmediate(massObject); massObject = null; }
             massBuilder = null;
             if (mass != null)
@@ -135,11 +138,9 @@ namespace AetherStrand
 
         void LateUpdate()
         {
-            if (solver == null) return;
+            if (solver == null || manualStep) return;
             float t0 = Time.realtimeSinceStartup;
-            ReadHead(out hpx, out hpy, out hpz, out hqx, out hqy, out hqz, out hqw);
-            double rpx = 0, rpy = 0, rpz = 0, rqx = 0, rqy = 0, rqz = 0, rqw = 1;
-            if (bustRoot != null) ToWebPose(bustRoot, rootRest, out rpx, out rpy, out rpz, out rqx, out rqy, out rqz, out rqw);
+            ReadPoses(out double rpx, out double rpy, out double rpz, out double rqx, out double rqy, out double rqz, out double rqw);
 
             if (fixedTimestep)
             {
@@ -156,6 +157,25 @@ namespace AetherStrand
             else solver.Step(Time.deltaTime, hpx, hpy, hpz, hqx, hqy, hqz, hqw, rpx, rpy, rpz, rqx, rqy, rqz, rqw, config);
             Refresh();
             LastStepMs = (Time.realtimeSinceStartup - t0) * 1000f;
+        }
+
+        /// <summary>Step the solver once by dt from the current head and body pose, then update the meshes. Deterministic
+        /// for a given pose sequence and dt; use with manualStep so LateUpdate does not step as well.</summary>
+        public void Tick(float dt)
+        {
+            if (solver == null) return;
+            float t0 = Time.realtimeSinceStartup;
+            ReadPoses(out double rpx, out double rpy, out double rpz, out double rqx, out double rqy, out double rqz, out double rqw);
+            solver.Step(dt, hpx, hpy, hpz, hqx, hqy, hqz, hqw, rpx, rpy, rpz, rqx, rqy, rqz, rqw, config);
+            Refresh();
+            LastStepMs = (Time.realtimeSinceStartup - t0) * 1000f;
+        }
+
+        void ReadPoses(out double rpx, out double rpy, out double rpz, out double rqx, out double rqy, out double rqz, out double rqw)
+        {
+            ReadHead(out hpx, out hpy, out hpz, out hqx, out hqy, out hqz, out hqw);
+            rpx = 0; rpy = 0; rpz = 0; rqx = 0; rqy = 0; rqz = 0; rqw = 1;
+            if (bustRoot != null) ToWebPose(bustRoot, rootRest, out rpx, out rpy, out rpz, out rqx, out rqy, out rqz, out rqw);
         }
 
         void Refresh()
