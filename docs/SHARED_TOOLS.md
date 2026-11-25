@@ -205,7 +205,13 @@ shows as dark teeth along the hairline.
       broad. Undercut: 0.5 and 0.45, with `chunkLength` 1.25.
     - `chunkBackWidth` (default 1) and `chunkBackTipWidth` (0..1, default 0): the back's chunks are wider and keep a share
       of width to their ends, so the back is a few broad tapered pieces over the fade instead of thin points with the dark
-      fade between them. Undercut: 1.3 and 0.3, with `backTaper` 0.5.
+      fade between them. Undercut v19 used 1.3 and 0.3; with rows of short domed chunks that read as scales, so v20 drops
+      them (see `chunkBackFlat`).
+    - `chunkUnderKeep` (0..1, default 1): share of the under layer kept under the chunks. Its locks are paper thin, and the
+      quiff lifts them over the front row; from the side, edge-on, they showed over the crest as a tangle of dark shards
+      (found by rendering each layer alone). With 0 the gaps between chunks show the painted short hair. Undercut: 0.
+    - `chunkBackFlat` (0..1, default 0): flattens the back's chunks (less thickness and roundness), so they lie as one
+      combed surface with pointed ends into the fade instead of domed scales. Undercut: 0.8, with `backTaper` 0.
     - `chunkThickness` (default 0.32) and `chunkRoundness` (default 0.6): a chunk's cross-section. Tested higher for the
       undercut; it only made the side and back look puffy, so the defaults stay.
   - `combDown` (0..1, default 0) with `whorlRadius: 0`: a combed-back crop has no visible whorl, so behind the ears the

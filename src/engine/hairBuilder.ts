@@ -701,6 +701,13 @@ export interface CropFieldOptions {
   /** Game chunks (rad, default chunkEdgeIn): how far inside the side/back edge the under layer starts. Under locks near
    * the edge that no chunk covers show as small dark leaves above the temples. */
   chunkUnderEdgeIn?: number;
+  /** Game chunks (0..1, default 1): share of the under layer kept under the chunks. Its paper-thin locks, lifted with the
+   * quiff, stand above the front chunks and show from the side as dark shards over the crest; with 0 the gaps between
+   * chunks show the painted short hair. */
+  chunkUnderKeep?: number;
+  /** Game chunks (0..1, default 0): flattens the chunks down the back (less thickness and roundness). Domed chunks in
+   * overlapping rows read as scales or feathers; flatter ones lie as one combed surface. */
+  chunkBackFlat?: number;
   /** Game chunks (default 0.3): a chunk's widest width as a share of its length. Short chunks capped at 0.3 come out
    * narrow and leave gaps; game art has short, broad pieces. */
   chunkAspect?: number;
@@ -938,6 +945,10 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       // (game chunks: the cards are the outer hair, so the narrow outer locks go; the under layer thins out toward the
       // fade, so the sides show the smooth painted short hair below the chunks instead of a stack of dark leaves)
       if ((o.chunks ?? 0) > 0 && rnd() < (o.chunks ?? 0) * (outer ? 1 : Math.min(1, 2 * se + (o.chunkBackThin ?? 0) * taperAt(u)))) return;
+      // (chunkUnderKeep: share of the under layer kept under the chunks. Its locks are paper thin and lie at the cards'
+      // height; at the front the quiff lifts them over the front row, and from the side their edge-on locks show over the
+      // crest as a tangle of dark shards. Where the cards leave gaps, the painted short hair shows instead)
+      if ((o.chunks ?? 0) > 0 && !outer && rnd() >= (o.chunkUnderKeep ?? 1)) return;
       // (and none where no chunk covers it: near the side edge the under layer's ends lay on the painted undercut as dark
       // leaves, seen from three-quarters and the side)
       if ((o.chunks ?? 0) > 0 && !outer && (se > 0.05 || (1 - frontAzK(az0)) * (o.chunkUnderEdgeIn ?? o.chunkEdgeIn ?? 0) > insideHair(u))) return;
@@ -1074,7 +1085,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       specs.push({
         pointsLocal: pts,
         width: cw,
-        thickness: chunkK > 0 ? Math.max(0.0025, cw * (o.chunkThickness ?? 0.32) * chunkK) : 0.0025, roundness: chunkK > 0 ? (o.chunkRoundness ?? 0.6) * chunkK : undefined,
+        thickness: chunkK > 0 ? Math.max(0.0025, cw * (o.chunkThickness ?? 0.32) * chunkK * (1 - (o.chunkBackFlat ?? 0) * backK)) : 0.0025, roundness: chunkK > 0 ? (o.chunkRoundness ?? 0.6) * chunkK * (1 - (o.chunkBackFlat ?? 0) * backK) : undefined,
         stiffnessBias: 0.97, layerAO: 0.9 + 0.1 * rnd(), layerOrder: 4, smooth: 2,
         // pointed: the taper starts early so each clump narrows to one tip
         // (a card lies on the locks, not on the skin: a light root like the outer locks'. With the usual dark root every
@@ -2900,7 +2911,7 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.11, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.5, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.11, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
       // game look (the stylised reference): the top is chunky pointed pieces (chunks) rising from the hairline, swept up and
       // to the side, spiky tips; the sides are the smooth painted undercut
       // (long chunks, about hairline to crown; wide roots buried in the paint so no cut ends show; none on the side edge or
@@ -2916,9 +2927,12 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // (the top's chunks lean out along their length so the top has height and its tips stand up and out, rather than
       // lying back with only the points lifting; no twist, which turned crest chunks edge-on into thin streaks seen side on;
       // the under layer lower and further from the edge, so it no longer pokes up as streaks or shows as dark leaves above
-      // the temples; shorter, broader chunks, and down the back a few wide ones ending in broad tapers over the fade)
+      // the temples; shorter, broader chunks)
       chunkStand: 0.045, chunkFrontStand: 0, chunkUnderHeight: 0.5, chunkUnderEdgeIn: 0.7, chunkMinLen: 0.5, chunkAspect: 0.45,
-      chunkBackWidth: 1.3, chunkBackTipWidth: 0.3,
+      // (v20: no under layer under the chunks: lifted with the quiff, its paper-thin locks stood over the front row and showed
+      // side on as a tangle of dark shards over the crest; the gaps show the painted short hair. Down the back, flat,
+      // longer chunks with pointed ends, so the back lies as one combed surface tapering into the fade, not rows of scales)
+      chunkUnderKeep: 0, chunkBackFlat: 0.8,
       flowPoleDrop: 0.3, spikeHeight: 0.03, quiff: 3.5, quiffBack: 0.25, hairlineWisps: 0,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
