@@ -457,7 +457,7 @@ with the builder's under layer or clump cards switched off (whose lock is it?). 
 AO, it is missing the highlight, which is most of a dark lock's brightness: check its shading tangent (`surfaceShine`,
 `shadeDir`) and whether it is a root (`scalpRoot`) left uncovered.
 
-## Matching the game reference (Undercut Fade, Nov 26)
+## Matching the game reference (Undercut Fade, Nov 25)
 
 The reference sheets show a photo column and a game (stylised) column. The target is the game column: Jaycee's rule is
 that the game version decides the build, not the life-like one. `tools/hair-blocks/refs/undercut-fade_game_views.json`
