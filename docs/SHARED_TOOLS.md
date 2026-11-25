@@ -202,11 +202,16 @@ shows as dark teeth along the hairline.
     read as dangling leaves.
   - `backTaperBand` (rad, default 0.45): how far inside the edge the back taper reaches. 0.9 spreads it over a tall band,
     so the back gets shorter steadily and no cutoff line shows (undercut: 0.9).
+  - `taperShade` (0..1, default 1): scales the back taper's AO darkening and its colour move toward the root end. 0
+    keeps the tapered locks the same tone as the rest of the top, so their tips don't read as dark leaves hanging over the
+    lighter painted fade (undercut: 0).
   - `backThin` (0..1, default 0): through the back taper, this share of locks is dropped, growing toward the edge
     (squared), so the painted fade shows through more and more and carries the taper (undercut: 0.8).
-  - Undercut: the top's locks end where a 0.6 fade would put the hair edge, whatever the recipe's `fadeHeight`. A lower
-    `fadeHeight` (0.3) then only fills the sides with solid painted short hair up to the top, so the head reads full from
-    the front, and the top keeps no long overhang at the back. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
+  - Undercut: the top's locks end where a 0.6 fade would put the hair edge, whatever the recipe's `fadeHeight`. The
+    recipe's `fadeHeight` is 0.4, so the fade climbs most of the way to the top's edge and the sides read as short hair
+    under a separate top, not one dark helmet (0.18 left solid paint to the cut line; 0.6 went too pale and high).
+    `backTaper` is 0.3 with `taperShade` 0: the back keeps longer pointed pieces that end over the fade, like the
+    stylised reference, instead of a flat dark skirt. Paint `feather` 0.08 and `sideburnSolid` 0.6 keep that
     painted side crisp. The hairline is `roundedHairline(1.1, 0.07, 0.75)` with `templeRecede` 0.1: a soft curve across
     the forehead with a small recession at each temple corner (a straight 0.02 lift read as a cap brim in the 3/4 view),
     plus `hairlineWobble(0.015)`. The top's `volume` is 0.75 of the old value and `spikeHeight` 0.045, for a tighter

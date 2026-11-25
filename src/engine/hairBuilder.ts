@@ -632,6 +632,10 @@ export interface CropFieldOptions {
   /** 0..1: through the back taper, this share of locks is dropped toward the edge (squared), so the painted short hair
    *  shows through more and more and the top fades into it instead of ending along a line. Default 0. */
   backThin?: number;
+  /** 0..1, default 1: how much the back taper also darkens its locks (AO) and moves them to the root end of the colour
+   *  gradient. 1 suits a top that tapers into solid dark painted short hair; over a tall, lighter fade use 0, or the
+   *  tapered tips read as dark leaves on the light band. */
+  taperShade?: number;
   /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
   colorRange?: [number, number];
   /**
@@ -898,7 +902,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         width: Math.min(spacing * (o.clumpWidth ?? 0.65) * (1 + 0.4 * fk) * (tuftLock ? 1.5 : 1), realLen * (tuftLock ? 0.9 : 0.6 - 0.25 * bt)) * (outer ? 1 : 1.3) * (0.9 + 0.2 * rnd()) * wMul * (1 - 0.45 * se),
         // the under layer is darker, except at the front hairline where it is seen face on beside the outer locks
         // (toward the fade the layers lie flat on the paint: no under-layer shadow, so the edge isn't a dark rim)
-        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.35 * bt) * (1 - pieceGroove * pieceOff * pieceOff), layerOrder: outer ? 3 : 2, smooth: 2,
+        thickness: 0.0025, stiffnessBias: 0.97, layerAO: THREE.MathUtils.lerp(THREE.MathUtils.lerp(outer ? 0.88 + 0.1 * rnd() : 0.84, 0.9, Math.max(backK, outer ? 0 : (o.sideUnderLight ?? 0) * _ss((Math.abs(az0) - 0.8) / 0.4))), 0.95, se) * (1 - 0.35 * bt * (o.taperShade ?? 1)) * (1 - pieceGroove * pieceOff * pieceOff), layerOrder: outer ? 3 : 2, smooth: 2,
         // (in the turn from combed back to combed down above the ear, tips taper sooner and melt into the layer below
         // instead of ending as hard wedges)
         tipStart: (outer ? 0.5 : 0.6) + 0.15 * backK - (o.turnTaper ?? 0) * _ss((Math.abs(az0) - 0.9) / 0.4) * (1 - _ss((Math.abs(az0) - 2.2) / 0.4)), lockNormal: false,
@@ -920,7 +924,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
         // (the under layer a little darker for depth between clumps, but no dark roots: seen through gaps in the outer layer,
         // dark roots read as holes)
         // (toward a tapered edge the locks move to the root end of the gradient, the colour of the painted short hair below)
-        colorRange: o.colorRange ?? taperRange(tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55], bt),
+        colorRange: o.colorRange ?? taperRange(tuftLock ? [0.3, 1] : outer || fk > 0.5 || se > 0.35 || backK > 0.5 ? [0.3, 0.68] : [0.24, 0.55], bt * (o.taperShade ?? 1)),
       });
     };
     roots(spacing, layer * 1.3, grow);
@@ -2746,7 +2750,7 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.8, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.35, pieceLift: 0.4, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 1, backTaperBand: 0.9, backThin: 0.8, spikeHeight: 0.045, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.8, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.35, pieceLift: 0.4, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spikeHeight: 0.045, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.75 * (0.02 + 0.016 * config.crownVolume),

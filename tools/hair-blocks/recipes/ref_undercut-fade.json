@@ -15,7 +15,7 @@
   "density": 1.05,
   "strandWidth": 0.95,
   "seed": 6611,
-  "fadeHeight": 0.18,
+  "fadeHeight": 0.4,
   "fadeBlend": 0.9,
   "shell": {
    "azDeg": [0, 20, 40, 60, 80, 100, 120, 140, 160, 180],
