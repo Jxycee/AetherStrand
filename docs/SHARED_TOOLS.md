@@ -143,6 +143,8 @@ shows as dark teeth along the hairline.
     where the hair turns from combed back to combed down; short clumped locks crossing that turn read as dark leaves,
     because they point away from the highlight their neighbours catch. `combTurn` (rad, default 0.9): how wide that turn
     is. A narrow turn bends each lock crossing it and the bent ends read as a row of dark crescents (undercut: 1.4).
+  - `sideSpikeCut` (0..1, default 0): spiked tips fade out beyond |azimuth| 1.0 to 1.4, so the side of the top lies flat
+    and the three-quarter silhouette isn't hairy at the side.
   - Locks stop at the edge. (v7 turned them to run along it; they crossed the combed-down hair above the ear as dark
     hooks, and the hairline row covers the front edge better.) The fade band thins locks less (squared), so the temples
     don't show lone locks on the paint.

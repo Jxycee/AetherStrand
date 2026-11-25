@@ -551,6 +551,8 @@ export interface CropFieldOptions {
   smoothFrom?: number;
   /** Width (rad of azimuth, from 1.3) of the turn from combed back over the top to combed down the back. Default 0.9. */
   combTurn?: number;
+  /** 0..1, default 0: spiked tips fade out beyond |azimuth| 1.0 to 1.4, so the side of the top lies flat. */
+  sideSpikeCut?: number;
   surfaceShine?: number;
   rigid?: boolean;
   /** Lock length at the top, metres. Locks near the edge run out of room and come out shorter by themselves. Default 0.055. */
@@ -744,7 +746,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
     const fk = frontK(u);
     const path = march(u, L0 * (1 - 0.3 * fk), fk);
     if (path.length < 3) return;
-    const topK = _ss((1.0 - phiOf(u)) / 0.6); // spikes only on the top, not the sides
+    // spikes only on the top, not the sides (spiked tips lifted off the side lie over the hair below as separate dark
+    // leaves, seen from three-quarters)
+    const topK = _ss((1.0 - phiOf(u)) / 0.6) * (1 - (o.sideSpikeCut ?? 0) * _ss((Math.abs(azOf(u)) - 1.0) / 0.4));
     guides.push({ u, path, vol: 0.9 + 0.2 * rnd(), spike: spike * (0.4 + 1.2 * rnd()) * topK });
   });
   const nearestGuide = (u: THREE.Vector3) => {
@@ -2591,7 +2595,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, spikeHeight: 0.035, clumpCards: 0.8, quiffBack: 0.9, quiff: 6.5, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, spikeHeight: 0.035, clumpCards: 0.8, quiffBack: 0.9, quiff: 6.5, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,
