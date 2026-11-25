@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { HairShellEditor } from './HairShellEditor';
 import {
   Camera,
   Check,
@@ -21,6 +22,7 @@ import {
   DEFAULT_BUILDER_BY_PRESET,
   HAIR_PRESETS,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -38,6 +40,9 @@ interface BottomControlDockProps {
   presetId: HairPresetId;
   onSelectPreset: (id: HairPresetId) => void;
   builderConfig: HairBuilderConfig | null;
+  /** The builder config as the hair is built (with the loaded head's ears), for the shape shell editor. */
+  buildConfig?: HairBuilderConfig | null;
+  onShellPreview?: (shell: HairShellGrid | null) => void;
   customStyleName: string | null;
   onChangeBuilder: (patch: Partial<HairBuilderConfig>) => void;
   onRandomizeStyle: () => void;
@@ -133,6 +138,8 @@ export function BottomControlDock({
   presetId,
   onSelectPreset,
   builderConfig,
+  buildConfig,
+  onShellPreview,
   customStyleName,
   onChangeBuilder,
   onRandomizeStyle,
@@ -169,6 +176,8 @@ export function BottomControlDock({
   const [showImportBox, setShowImportBox] = useState(false);
   const [importDraft, setImportDraft] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  const [shellOpen, setShellOpen] = useState(false);
+  const noPreview = useCallback(() => {}, []);
 
   const activeBuilder: HairBuilderConfig = builderConfig ?? DEFAULT_BUILDER_BY_PRESET[presetId];
 
@@ -573,6 +582,25 @@ export function BottomControlDock({
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Shape shell: the outer shape as an editable thickness grid (hairShell.ts) */}
+              <div className="pt-2 border-t border-white/8">
+                <button
+                  type="button"
+                  onClick={() => setShellOpen((o) => !o)}
+                  aria-expanded={shellOpen}
+                  className="text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  {shellOpen ? 'Hide shape shell' : `Shape shell${activeBuilder.shell ? ' (on)' : ''}: edit the outer shape`}
+                </button>
+                {shellOpen && (
+                  <HairShellEditor
+                    config={buildConfig ?? activeBuilder}
+                    onChange={(shell) => onChangeBuilder({ shell })}
+                    onPreview={onShellPreview ?? noPreview}
+                  />
+                )}
               </div>
 
               {/* Row 3: Procedural Generator & Live Sculpt Status */}

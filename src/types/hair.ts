@@ -50,6 +50,22 @@ export type HairBuilderArchetype =
   | 'rope-locs'
   | 'coily-afro';
 
+/**
+ * The outer shape of a hairstyle as a thickness grid over the scalp (see hairShell.ts). Plain JSON: an AI or a person can
+ * read and edit it directly. mm[row][col] is the target height of the hair surface above the scalp in scene mm at
+ * phiDeg[row] (degrees down from the crown: 0 top, ~95 temples, ~125 ear lobe, ~135 nape) and azDeg[col] (degrees around
+ * from the front: 0 forehead, 90 over the ear, 180 back). null leaves that cell as built.
+ */
+export interface HairShellGrid {
+  azDeg: number[];
+  phiDeg: number[];
+  mm: (number | null)[][];
+  /** 0..1: how far the hair moves to the shell (default 1). */
+  strength?: number;
+  /** Default true: one grid for both sides (azDeg 0..180). false: azDeg runs -180..180, positive = the +x side (the character's left). */
+  mirror?: boolean;
+}
+
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;
   partPosition: number; // -1 (deep left) to +1 (deep right), 0 = center
@@ -89,6 +105,8 @@ export interface HairBuilderConfig {
    * defaults (Tobin's head). Carried in recipes, so an export is built for the same ears it was previewed on.
    */
   earLandmarks?: { earFrontTheta: number; earBackTheta: number; earCenterTheta: number; earTopPhi: number; earMidPhi: number; earLobePhi: number; napePhi?: number };
+  /** Optional outer-shape grid (hairShell.ts): moves the built locks in or out so the hair surface meets it. */
+  shell?: HairShellGrid;
 }
 
 export interface ShaderConfig {

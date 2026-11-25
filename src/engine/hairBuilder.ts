@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyHairShell } from './hairShell';
 import { applyHairlineLook, binAzimuth, deriveScalpPaint, makeScalpPaint, sampleArr, ScalpPaint } from './scalpPaint';
 import {
   HairBuilderArchetype,
@@ -1935,7 +1936,17 @@ const ARCHETYPE_LABELS: Record<HairBuilderArchetype, string> = ARCHETYPE_METADAT
  * Generates a cohesive, anatomically sealed, layered Final Fantasy / JRPG hairstyle directly
  * from parametric HairBuilderConfig controls across all 12 distinct archetypes.
  */
+/**
+ * Builds a style's locks: the archetype, then the outer-shape shell (config.shell, hairShell.ts) when the recipe has one.
+ */
 export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[] {
+  const specs = buildArchetypeSpecs(config);
+  if (config.shell?.mm?.length) applyHairShell(specs, config.shell);
+  return specs;
+}
+
+/** The archetype's own locks, before the shell. */
+export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] {
   setEarLandmarks(config.earLandmarks);
   const rand = seededRand(config.seed || 1337);
   const specs: LockBuildSpec[] = [];

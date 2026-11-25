@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BustRig, createStylizedBust } from '../engine/bustModel';
-import type { CharacterHead } from '../engine/characterHead';
+import { conformPoint, type CharacterHead } from '../engine/characterHead';
+import { hairShellPolylines } from '../engine/hairShell';
+import { naturalMaxHairlinePhi } from '../engine/hairBuilder';
 import { HairPhysicsSystem, HairSimulationStats } from '../engine/hairPhysics';
 import {
   createHairShaderMaterial,
@@ -17,6 +19,7 @@ import {
   CameraPresetId,
   ExportedHairLock,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -61,6 +64,8 @@ interface HairViewportProps {
   onTexturesReady?: (pack: HairTexturePack) => void;
   /** Optional character head (OBJ, fitted like the Unity plugin) shown instead of the mannequin. */
   characterHead?: CharacterHead | null;
+  /** Optional outer-shape shell (hairShell.ts) drawn as a green grid over the hair while it is being edited. */
+  shellOverlay?: HairShellGrid | null;
 }
 
 const CAMERA_PRESETS: Record<CameraPresetId, { pos: [number, number, number]; target: [number, number, number] }> = {
@@ -305,6 +310,7 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     onAuditChange,
     onTexturesReady,
     characterHead = null,
+    shellOverlay = null,
   },
   ref
 ) {
@@ -455,6 +461,30 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   // the hair is fitted to the loaded character's skull (head conform), as the Unity plugin and the preview renderer do
   const characterHeadRef = useRef<CharacterHead | null>(characterHead);
   characterHeadRef.current = characterHead;
+
+  // shell overlay: bright green lines where they are in front of the hair, a faint copy through it
+  const shellKey = shellOverlay ? JSON.stringify(shellOverlay) : '';
+  useEffect(() => {
+    const bust = bustRigRef.current;
+    if (!bust || !shellOverlay) return;
+    const conform = characterHead?.conform ?? null;
+    const lines = hairShellPolylines(shellOverlay, (p) => { if (conform) conformPoint(conform, p, naturalMaxHairlinePhi, true); });
+    const seg: number[] = [];
+    for (const l of lines) for (let k = 0; k + 1 < l.length; k++) seg.push(l[k].x, l[k].y, l[k].z, l[k + 1].x, l[k + 1].y, l[k + 1].z);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+    const front = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x3cff5a, transparent: true, opacity: 0.95 }));
+    const through = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x3cff5a, transparent: true, opacity: 0.22, depthTest: false }));
+    front.renderOrder = 10; through.renderOrder = 11;
+    bust.headPivot.add(front, through);
+    return () => {
+      bust.headPivot.remove(front, through);
+      geo.dispose();
+      (front.material as THREE.Material).dispose();
+      (through.material as THREE.Material).dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shellKey, characterHead]);
 
   useEffect(() => {
     bustRigRef.current?.setCharacterHead(characterHead);

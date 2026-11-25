@@ -27,6 +27,7 @@ import {
   HAIR_PRESETS,
   HairBuilderArchetype,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -147,6 +148,8 @@ export default function App() {
   const [view, setView] = useState<WorkspaceView>('viewport');
   // Character head shown in place of the mannequin (OBJ, fitted like the Unity plugin's head fit)
   const [characterHead, setCharacterHead] = useState<CharacterHead | null>(null);
+  // the shape shell grid shown over the hair while the shell editor is open (follows a drag before the hair rebuilds)
+  const [shellPreview, setShellPreview] = useState<HairShellGrid | null>(null);
   const headInputRef = useRef<HTMLInputElement>(null);
   const handleHeadFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -752,6 +755,7 @@ export default function App() {
           visionMode={visionMode}
           backdropMode={backdropMode}
           characterHead={characterHead}
+          shellOverlay={view === 'viewport' ? shellPreview : null}
           paused={view !== 'viewport' || turnaroundCaptureUrl !== null}
           onStatsChange={setSimStats}
           onAuditChange={setQualityAudit}
@@ -792,6 +796,8 @@ export default function App() {
           presetId={presetId}
           onSelectPreset={handleSelectPreset}
           builderConfig={builderConfig}
+          buildConfig={buildConfig}
+          onShellPreview={setShellPreview}
           customStyleName={customStyleName}
           onChangeBuilder={handleChangeBuilder}
           onRandomizeStyle={() => handleRandomizeStyle()}

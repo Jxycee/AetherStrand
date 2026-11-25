@@ -265,6 +265,62 @@ ellipsoid, so back hair would otherwise float); locks that hang past the hairlin
 the web head collider uses the same skull over the scalp (`headConformClearance`). Not yet ported to the Unity plugin;
 the port should keep the same two-way rule.
 
+## Shape shell (outer shape as a thickness grid)
+
+`src/engine/hairShell.ts`; recipe field `builder.shell` (`HairShellGrid` in src/types/hair.ts); web generator:
+Builder tab > Shape shell; fit tool: `tools/preview/shell_fit.ts`.
+
+Why: a style's outline was set indirectly, through a dozen archetype numbers (volume, spike height, quiff, taper), so
+"the top is too low in profile" meant guessing which number moves it. The shell says the shape directly: how high the
+hair surface stands above the scalp in each direction.
+
+The grid, plain JSON (any person or AI can read and write it):
+
+```json
+{
+  "azDeg": [0, 20, 40, 60, 80, 100, 120, 140, 160, 180],
+  "phiDeg": [0, 15, 30, 45, 60, 75, 90, 105, 120, 135],
+  "mirror": true,
+  "strength": 1,
+  "mm": [[36, 36, ...], [64.5, 58, ...], ...]
+}
+```
+
+- `mm[row][col]` is the target height of the hair surface above the scalp ellipsoid, in scene mm (1 scalp radius is
+  about 295 mm in the web scene), at `phiDeg[row]` (degrees down from the crown: 0 top, about 75 the forehead hairline,
+  95 the temples, 125 the ear lobe, 135 the nape) and `azDeg[col]` (degrees round from the front: 0 forehead, 90 over the
+  ear, 180 back). `null` leaves that cell as built.
+- `mirror` (default true): both sides share the grid. With `false`, `azDeg` runs -180 to 180, positive = the +x side
+  (the character's left, screen right in the front view).
+- `strength` 0..1 blends from the style as built to the shell.
+
+What it does: after the archetype builds its locks, `applyHairShell` measures the surface it built (per cell, the
+height most locks reach: the 75th percentile of each lock's highest point within a small disc) and scales every lock
+node's height above the scalp by target / built, in three passes. Each lock keeps its layering under the surface and its
+root stays on the scalp. It never adds hair where there is none, and fade caps (stubble) are left alone. It runs before
+the head conform, so the exported locks carry the result and Unity needs nothing new.
+
+Workflow:
+1. Capture the style as built: `--shell-capture grid.json` (every run also prints the grid as a table to stderr:
+   `built mm`, and with a shell `target mm` and `result mm`).
+2. Edit numbers (or drag cells in the web generator), render with `--shell grid.json --shell-overlay` and look at both
+   the clean render and the overlay. Then paste the grid into the recipe as `builder.shell`.
+3. Or let the fit tool move it toward a reference outline: `npx tsx tools/preview/shell_fit.ts <render flags> --ref
+   refs/style_views.json --iters 6 --save fitted.json --out fit.png`. Each round renders, reads `--shell-gaps` (for each
+   cell on a view's rim, where the rendered hair edge ends against where the reference hair ends, along the cell's
+   outward direction on screen) and moves cells by 70% of their gap, at most 12 mm a round, never below 2 mm. It keeps
+   the round with the best outline score. Options: `--damp`, `--step`, `--rows 15,30,45` (only those rows move),
+   `--shell start.json`. Always look at the best round's render: the fit only reads the outline.
+
+What it can't fix: the hairline, the fade and anything painted on the scalp (those are scalp paint), and hair that isn't
+there. On the undercut v13 the fit took the outline score from 72 to 74 (top and quiff front in profile); what is left
+is the forehead hairline and the fade, which are paint.
+
+Web generator: Builder tab > Shape shell. "Start from this style" copies the built heights into the recipe. Drag a cell
+up or down to change it (Alt: fine steps; the Soft and Wide brushes spread the change to neighbouring cells), Shift-click
+leaves a cell as built, arrow keys nudge the focused cell. Warm cells are thicker than the style builds them, cool ones
+thinner. The green grid in the viewport follows the drag; the hair rebuilds when the drag ends. Copy JSON carries the grid.
+
 ## Preview renderer (for humans and AI)
 
 `npx tsx tools/preview/cpu_preview.ts --recipe recipe.json --out sheet.png` renders the real lock geometry, with no GPU.
@@ -282,6 +338,10 @@ the port should keep the same two-way rule.
 | `--grid` | Draw the scalp coordinate grid on the head: blue lines of \|azimuth\|, red lines of phi, every 0.1 rad. |
 | `--lines th:1.43,ph:1.68,...` | Draw only these scalp lines (theta = \|azimuth\|, ph = phi), coloured blue, cyan, red, orange, green, yellow, magenta, white in order. Use it to place landmarks and cut lines on a head. |
 | `--ref refs/style_views.json` | Outline score against a reference (needs `--head`). See below. |
+| `--shell grid.json` / `--no-shell` | Use that shape shell instead of the recipe's, or none. See Shape shell. |
+| `--shell-capture grid.json` | Write the hair's current outer heights as an editable shell grid. |
+| `--shell-overlay` | Write `<out>_shell.png`: the shell as a green grid on the render. |
+| `--shell-gaps gaps.json` | With `--ref`: per shell cell, how far its hair edge sits from the reference outline (mm). |
 
 ### Outline score (`--ref`)
 
