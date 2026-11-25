@@ -37,6 +37,8 @@ namespace AetherStrand
 
         AetherStrandWebSolver solver;
         AetherStrandWebMesh meshBuilder;
+        AetherStrandWebMassMesh massBuilder; // hybrid inner mass (geometry's hybridMass block), null without one
+        GameObject massObject;
         MeshFilter mf;
         MeshRenderer mr;
         Vector3 origin;
@@ -45,6 +47,8 @@ namespace AetherStrand
         double hpx, hpy, hpz, hqx, hqy, hqz, hqw;
         public AetherStrandWebSolver Solver => solver;
         public float LastStepMs { get; private set; }
+        /// <summary>The hybrid inner mass renderer, or null when the geometry has no hybridMass block.</summary>
+        public MeshRenderer MassRenderer => massObject != null ? massObject.GetComponent<MeshRenderer>() : null;
 
         void Start()
         {
@@ -65,6 +69,16 @@ namespace AetherStrand
             solver.Load(locks);
             meshBuilder = new AetherStrandWebMesh(solver, locks);
             if (fitBone != null) { meshBuilder.useFit = true; meshBuilder.fitScale = fitScale; meshBuilder.fitOffset = fitOffset; }
+            // hybrid inner mass: built by the web generator, deformed here from the same solver
+            var mass = AetherStrandWebMass.Load((System.Collections.Generic.Dictionary<string, object>)AetherStrandJson.Parse(geometryJson.text));
+            if (massObject != null) { if (Application.isPlaying) Destroy(massObject); else DestroyImmediate(massObject); massObject = null; }
+            massBuilder = null;
+            if (mass != null)
+            {
+                mass.SetRestNodes(locks);
+                massBuilder = new AetherStrandWebMassMesh(mass);
+                if (fitBone != null) { massBuilder.useFit = true; massBuilder.fitScale = fitScale; massBuilder.fitOffset = fitOffset; }
+            }
 
             origin = headPivot.position - new Vector3(0f, 0.44f * unitScale, 0f);
             headRest = headPivot.rotation;
@@ -80,6 +94,16 @@ namespace AetherStrand
             }
             if (material != null) mr.sharedMaterial = material;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+            if (massBuilder != null)
+            {
+                // a child with identity pose: its vertices are written in the same space as the lock mesh
+                massObject = new GameObject("AetherStrand_Mass");
+                massObject.transform.SetParent(transform, false);
+                massObject.AddComponent<MeshFilter>().sharedMesh = massBuilder.mesh;
+                var mmr = massObject.AddComponent<MeshRenderer>();
+                if (material != null) mmr.sharedMaterial = material;
+                mmr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+            }
 
             ReadHead(out hpx, out hpy, out hpz, out hqx, out hqy, out hqz, out hqw);
             solver.SnapToHead(hpx, hpy, hpz, hqx, hqy, hqz, hqw, config.strandWidthScale);
@@ -139,6 +163,7 @@ namespace AetherStrand
             if (fitBone != null) { transform.localPosition = Vector3.zero; transform.localRotation = Quaternion.identity; }
             else transform.SetPositionAndRotation(origin, Quaternion.identity);
             meshBuilder.Update(hpx, hpy, hpz, hqx, hqy, hqz, hqw, config.strandWidthScale, unitScale);
+            massBuilder?.Update(solver, hpx, hpy, hpz, hqx, hqy, hqz, hqw, unitScale);
         }
     }
 }

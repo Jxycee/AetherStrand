@@ -576,3 +576,20 @@ photo outline, it pushed the chunks into curls. Undercut cut values for the game
 0.55, `napePhi` lerp(2.2, 2.55) by backLength with `napeCurve` 0.45 (the nape sits below the ear lobes), the top's own
 paint capped at backLength 0.34 so the longer nape lengthens the painted undercut, not the top. Recipe: charcoal colours,
 `fadeHeight` 0.25, `fadeBlend` 0.4.
+
+## Hybrid hair in Unity (mass, edge cards, strand cards)
+
+The hybrid (plan phases 1 and 2) reaches the plugin through PresetGeometry.json. The web builds everything; the plugin only
+deforms and draws.
+
+| Tool | What it does |
+|---|---|
+| `npx tsx tools/unity-parity/web_export.ts <recipe.json> <outDir> [--mass] [--edge-cards N]` | Writes PresetGeometry.json. With the mass on, the file carries a `hybridMass` block: the built mesh, its binding to the lock nodes and the follow data (`web_geometry.ts exportMass`). Edge cards are ordinary locks. |
+| `npx tsx tools/unity-parity/mass_roundtrip.ts <recipe.json> [--vectors out.json]` | Rebuilds the mass from the exported block alone and checks it deforms like the live one under a set motion. `--vectors` writes that motion and the expected result. |
+| `dotnet run --project tools/unity-parity/mass_test -- PresetGeometry.json vectors.json` | Runs the plugin's C# mass deform (`Runtime/AetherStrandWebMass.cs`, no Unity needed) on the vectors and compares it with the web. Also prints the deform's cost per frame. |
+
+- Strand cards: a lock with `strandCard` (the hybrid's fine strands, such as the Messy Mage baby hairs) gets card mask 0.75.
+  The shaders cut it into 3 fine hairs along its whole length (`strandCardAlpha` in hairShaders.ts, `AetherStrandCardAlpha`
+  in AetherStrand_Hair.shader). Strand cards are also rigid: short hair barely moves.
+- In Unity the mass needs the live web solver (`AetherStrandWebImport.ApplyLive`, component `AetherStrandWebHair`), which
+  adds a child `AetherStrand_Mass` with the hair material. The baked-mesh path (`Apply`) ignores the block.
