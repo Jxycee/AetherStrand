@@ -80,6 +80,8 @@ interface VolumetricHairLock {
   rigid?: boolean;
   /** Optional 0..1: shading tangent flattened onto the scalp, so close-cut locks shine in bands (LockBuildSpec.surfaceShine). */
   surfaceShine?: number;
+  /** Optional 0..1: width of the root end as a fraction of the lock's width (LockBuildSpec.rootWidth). */
+  rootWidth?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -219,6 +221,8 @@ function packCellKey(cx: number, cy: number, cz: number): number {
 
 // Precomputed per-node ribbon taper & Verlet physics lookup tables (eliminates ~25k Math.pow/sin calls per frame!)
 const _NODE_ROOT_SIN = new Float32Array(12);
+// width of a lock's root end, as a fraction of its width: rootWidth when set, otherwise by scalpRoot
+const rootMinWOf = (lock: { scalpRoot: number; rootWidth?: number }) => lock.rootWidth ?? (lock.scalpRoot >= 0.5 ? 0.36 : 0.08);
 const _NODE_TIP_TAPER = new Float32Array(12);
 const _NODE_BASE_TIP_TAPER = new Float32Array(12);
 const _NODE_THICK_FACTOR = new Float32Array(12);
@@ -2521,6 +2525,7 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       colorRange: (sp as any).colorRange,
       rigid: (sp as any).rigid === true || undefined,
       surfaceShine: (sp as any).surfaceShine > 0 ? Math.min(1, (sp as any).surfaceShine) : undefined,
+      rootWidth: (sp as any).rootWidth !== undefined ? Math.max(0.05, Math.min(1, (sp as any).rootWidth)) : undefined,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -2711,7 +2716,7 @@ function bakeInterLockRestPose(
       const ps = lock.particles;
       const base = s * NODES_PER_LOCK;
       const isBase = lock.isBaseShell;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const invMass = 1.0 / (lock.mass * massScale);
       const layer = isBase ? 0 : lock.layerOrder;
       const rootY = ps[0].rawRestLocal.y;
@@ -3821,7 +3826,7 @@ export class HairPhysicsSystem {
       const lock = this.locks[s];
       if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       for (let k = 2; k < ps.length; k++) {
         if (entryCount >= MAX_HASH_ENTRIES) break;
         const p = ps[k].pos;
@@ -4139,7 +4144,7 @@ export class HairPhysicsSystem {
       const lock = this.locks[s];
       if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const invMass = 1.0 / (lock.mass * massScale);
       const layer = lock.layerOrder;
       const rootY = ps[0].rawRestLocal.y;
@@ -5244,7 +5249,7 @@ export class HairPhysicsSystem {
       }
       const isBase = lock.isBaseShell;
       const lockNormal = lock.lockNormal;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const effWidthScale = isBase ? 1.0 : widthScale;
       const effThickScale = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effWidthScale);
       const baseHalfW = lock.baseWidth * 0.5 * effWidthScale;

@@ -39,6 +39,7 @@ export function exportGeometry(recipe: any): any {
     if (lk.colorRange) { e.colorFrom = lk.colorRange[0]; e.colorTo = lk.colorRange[1]; }
     if (lk.rigid) e.rigid = true;
     if (lk.surfaceShine) e.surfaceShine = lk.surfaceShine;
+    if (lk.rootWidth !== undefined) e.rootWidth = lk.rootWidth;
   });
   return {
     schemaVersion: '2.1',
@@ -47,7 +48,7 @@ export function exportGeometry(recipe: any): any {
     presetId: recipe.presetId,
     presetName: recipe.customName ?? recipe.presetId,
     coordinateSystem: 'blender_z_up_neg_y_front',
-    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine when set',
+    solverExtras: 'layerOrder,mass,restMidR,rootRawY,stiffnessWeight,rigid per lock; mesh: isFadeCap,fadeStart,smooth,roundness,tipStart,tipWidth,ripple,rippleFreq,colorFrom,colorTo,surfaceShine,rootWidth when set',
     lockCount: exported.length,
     // Painted short-hair layer under the locks (scalpPaint.ts); the plugin builds a scalp shell from the character's head.
     ...(hair.scalpPaint ? { scalpPaint: hair.scalpPaint } : {}),

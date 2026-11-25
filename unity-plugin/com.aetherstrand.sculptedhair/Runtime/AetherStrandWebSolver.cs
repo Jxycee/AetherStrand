@@ -52,6 +52,7 @@ namespace AetherStrand
             public double ripple = 0, rippleFreq = 9; // 0..0.45 periodic width bumps along the lock (locs, rope twists)
             public double colorFrom = double.NaN, colorTo = double.NaN; // part of the root->tip colour gradient shown (NaN: 0..1)
             public double surfaceShine = 0;           // 0..1 shading tangent flattened onto the scalp, so close-cut locks shine in bands
+            public double rootWidth = double.NaN;     // 0.05..1 root end width as a fraction of the lock's width (NaN: by scalpRoot)
             public double[] rootNormal = { 0, 1, 0 }; // web head-local
         }
 
@@ -103,7 +104,7 @@ namespace AetherStrand
         double[] cx, cy, cz;                  // restCurvatureLocal
         double[] segLen, stiffW;
         double[] fpx, fpy, fpz, fvx, fvy, fvz; // framePrevPos / framePrevVel (head-local)
-        double[] lockSeed, lockBaseW, lockBaseT, lockMass, lockRestMidR, lockRootRawY, lockScalpRoot, lockLayerAO;
+        double[] lockSeed, lockBaseW, lockBaseT, lockMass, lockRestMidR, lockRootRawY, lockScalpRoot, lockLayerAO, lockRootWidth;
         int[] lockLayer;
         bool[] lockBase, lockNormal, lockRigid;
         double[] rootNX, rootNY, rootNZ;
@@ -149,7 +150,7 @@ namespace AetherStrand
             segLen = new double[P]; stiffW = new double[P];
             fpx = new double[P]; fpy = new double[P]; fpz = new double[P]; fvx = new double[P]; fvy = new double[P]; fvz = new double[P];
             lockSeed = new double[L]; lockBaseW = new double[L]; lockBaseT = new double[L]; lockMass = new double[L];
-            lockRestMidR = new double[L]; lockRootRawY = new double[L]; lockScalpRoot = new double[L]; lockLayerAO = new double[L];
+            lockRestMidR = new double[L]; lockRootRawY = new double[L]; lockScalpRoot = new double[L]; lockLayerAO = new double[L]; lockRootWidth = new double[L];
             lockLayer = new int[L]; lockBase = new bool[L]; lockNormal = new bool[L]; lockRigid = new bool[L];
             rootNX = new double[L]; rootNY = new double[L]; rootNZ = new double[L];
             maxBaseW = 0.052;
@@ -169,7 +170,7 @@ namespace AetherStrand
                 lockMass[s] = d.mass > 0 ? d.mass : Math.Max(0.00018, d.baseWidth * d.baseThickness);
                 lockLayer[s] = d.layerOrder >= 0 ? d.layerOrder : (d.isBaseShell ? 0 : 2);
                 lockBase[s] = d.isBaseShell; lockNormal[s] = d.lockNormal; lockRigid[s] = d.rigid;
-                lockScalpRoot[s] = d.scalpRoot; lockLayerAO[s] = d.layerAO;
+                lockScalpRoot[s] = d.scalpRoot; lockLayerAO[s] = d.layerAO; lockRootWidth[s] = d.rootWidth;
                 lockRootRawY[s] = double.IsNaN(d.rootRawY) ? ry[b] : d.rootRawY;
                 if (double.IsNaN(d.restMidR))
                 {
@@ -965,7 +966,7 @@ namespace AetherStrand
             {
                 if (lockBase[s] || lockRigid[s]) continue;
                 int b = s * N;
-                double rootMinW = lockScalpRoot[s] >= 0.5 ? 0.36 : 0.08;
+                double rootMinW = !double.IsNaN(lockRootWidth[s]) ? lockRootWidth[s] : (lockScalpRoot[s] >= 0.5 ? 0.36 : 0.08);
                 double invMass = 1.0 / (lockMass[s] * massScale);
                 int layer = lockLayer[s];
                 double rootY = lockRootRawY[s];

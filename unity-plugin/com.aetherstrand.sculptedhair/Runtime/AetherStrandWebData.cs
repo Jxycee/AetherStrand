@@ -256,6 +256,7 @@ namespace AetherStrand
                 ld.colorFrom = AetherStrandJson.D(d, "colorFrom", double.NaN);
                 ld.colorTo = AetherStrandJson.D(d, "colorTo", double.NaN);
                 ld.surfaceShine = System.Math.Max(0.0, System.Math.Min(1.0, AetherStrandJson.D(d, "surfaceShine", 0.0)));
+                ld.rootWidth = AetherStrandJson.Has(d, "rootWidth") ? System.Math.Max(0.05, System.Math.Min(1.0, AetherStrandJson.D(d, "rootWidth", 0.36))) : double.NaN;
                 if (AetherStrandJson.Has(d, "rootNormal"))
                 {
                     double[] rn = AetherStrandJson.Arr(d["rootNormal"]);

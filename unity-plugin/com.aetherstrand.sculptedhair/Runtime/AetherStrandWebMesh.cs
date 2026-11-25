@@ -181,7 +181,7 @@ namespace AetherStrand
                 var lk = locks[s];
                 int b = s * AetherStrandWebSolver.N;
                 bool isBase = lk.isBaseShell, lockNormal = lk.lockNormal;
-                double rootMinW = lk.scalpRoot >= 0.5 ? 0.36 : 0.08;
+                double rootMinW = !double.IsNaN(lk.rootWidth) ? lk.rootWidth : (lk.scalpRoot >= 0.5 ? 0.36 : 0.08);
                 double effW = isBase ? 1.0 : widthScale;
                 double effT = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effW);
                 double baseHalfW = lk.baseWidth * 0.5 * effW;

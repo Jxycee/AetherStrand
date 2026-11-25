@@ -108,9 +108,18 @@ shows as dark teeth along the hairline.
   - `hairPhi(az)` (required): where the modelled hair ends, usually the solid part of the fade paint.
   - `frontInset` (default 0.03 rad): at the front, roots start just behind the painted hairline, so the forehead shows the
     paint's soft hairline and the hair rises from behind it.
+  - `hairlineRow` (share of `spacing`, e.g. 0.55; default off): an extra row of outer locks rooted evenly along the front
+    hairline. Scattered roots leave gaps along the edge, and seen from the front the rising locks read as a picket fence
+    (or hanging bangs) with the paint showing between them. The row closes the front into one mass.
+  - Front edge locks are sunk into the scalp at the root and have full-width roots (`rootWidth` 0.95, `scalpRoot` 0.9),
+    so they grow out of the skin along one line. Narrow roots made each lock a rounded or pointed end, and a row of those
+    along the forehead read as bangs. The quiff starts from zero at the hairline (a floor there made the front row jump
+    off the scalp as a shelf), and the edge locks climb more slowly, so they lean back as they rise.
   - `clumpSpacing` (default 0.055) and `clump` (0..1, default 0.55): clump size and how strongly tips gather.
   - `length`, `volume` (height of the hair surface), `spike` (spiked clump tips on the top), `stand` and `quiff` (front lift:
-    low where the hair leaves the hairline, highest a few centimetres back, rising straight up rather than out), `sweep`, `sideTaper` (0..1, default 0.5: how much flatter the sides and back lie than the top, so the head
+    low where the hair leaves the hairline, highest a few centimetres back, rising straight up rather than out), `sweep`
+    (the top leans to one side, so seen from the front it rises on a diagonal instead of in vertical bars; never pointed
+    down, and not on the back, which stays combed straight down), `sideTaper` (0..1, default 0.5: how much flatter the sides and back lie than the top, so the head
     doesn't read as a bowl).
   - `fadeEdge` (rad, default 0.3): in this band above the side and back edge the crop melts into the painted fade. The
     hair surface sinks to the scalp, locks thin out and narrow, and the layer shadow lifts, so the crop ends with no
@@ -130,8 +139,13 @@ shows as dark teeth along the hairline.
     two flows meet or parts into a bald spot.
   - `backSmooth` (0..1, default 1): behind the ears the locks are longer and the under layer is shaded like the outer one,
     so the back reads as one combed surface instead of shingles with dark gaps.
-  - Near the edge a lock turns to run along it instead of stopping, so locks rooted close to the edge are long enough to
-    keep and the crop's edge has no lone locks on the paint. The fade band thins locks less (squared), for the same reason.
+  - `smoothFrom` (|azimuth| rad, default 1.6): where that smooth back begins. 1.0 also lays the side above the ear smooth,
+    where the hair turns from combed back to combed down; short clumped locks crossing that turn read as dark leaves,
+    because they point away from the highlight their neighbours catch. `combTurn` (rad, default 0.9): how wide that turn
+    is. A narrow turn bends each lock crossing it and the bent ends read as a row of dark crescents (undercut: 1.4).
+  - Locks stop at the edge. (v7 turned them to run along it; they crossed the combed-down hair above the ear as dark
+    hooks, and the hairline row covers the front edge better.) The fade band thins locks less (squared), so the temples
+    don't show lone locks on the paint.
   - The under layer shows no dark roots: seen through gaps in the outer layer, dark roots read as holes.
   - `surfaceShine` (default 0.85): see Lock options below.
   - `rigid` (default true): see Rigid locks below.
@@ -154,9 +168,14 @@ shows as dark teeth along the hairline.
   neighbouring locks shine together in broad bands instead of every short lock catching the light at its own bend and
   dotting the top with flecks. Only the highlight changes, never the shape. Unity: `LockData.surfaceShine`, applied to
   the mesh tangents in AetherStrandWebMesh.
-- Dark hair: hex colours are taken as linear, so pick very dark values (undercut-fade: root `#0e0a07`, base `#1c140f`,
-  tip `#271d16`) and a muted highlight colour (`#6e6258`, intensity about 0.17). A near-black base with strong highlights
-  turns every lock that misses the highlight into a black streak; a bright highlight colour turns the whole head tan.
+- `rootWidth` (0.05..1, LockBuildSpec, exported per lock): the width of the root end as a share of the lock's width. By
+  default it follows `scalpRoot` (0.36, or 0.08 below 0.5), and the root widens to full over the first quarter of the
+  lock, so the root is a rounded or pointed end. Near 1, with the root sunk in the scalp, the lock grows out of the skin
+  along one clean line. Unity: `LockData.rootWidth` in AetherStrandWebMesh and AetherStrandWebSolver.
+- Dark hair: hex colours are taken as linear, so pick very dark, fairly neutral values (undercut-fade: root `#0e0a07`,
+  base `#241d18`, tip `#31281f`) and a muted highlight colour (`#6e6258`, primary intensity about 0.13 with a broad
+  secondary lobe, power 8, intensity 0.1). A near-black base with a strong, narrow highlight turns every lock that misses
+  the highlight into a black streak; a bright highlight colour turns the whole head tan; a warmer base turns it orange.
 
 ## Head conform (character skulls)
 
