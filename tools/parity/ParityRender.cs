@@ -17,7 +17,7 @@ public static class ParityRender
     [Serializable] class Rig { public string bg, keyC, fillC, rimC, skyC, gndC; public V3 keyD, fillD, rimD; public float keyI, fillI, rimI, hemiI; }
 
         // three.js ACESFilmicToneMapping (exposure 1.16) + sRGB, composited over the clear colour; 2x2 supersample to 512
-    static Texture2D ToneMapDownsample(Texture2D src, Color bgSrgb)
+    public static Texture2D ToneMapDownsample(Texture2D src, Color bgSrgb)
     {
         var px = src.GetPixels(); int W = src.width, N = W / 2;
         var outT = new Texture2D(N, N, TextureFormat.RGB24, false); var o = new Color[N * N];
@@ -35,7 +35,7 @@ public static class ParityRender
         }
         outT.SetPixels(o); outT.Apply(); return outT;
     }
-    static Color InverseBg(Color bgSrgb)
+    public static Color InverseBg(Color bgSrgb)
     {
         Color tgt = bgSrgb.linear; Color x = tgt;
         for (int it = 0; it < 200; it++)
@@ -56,7 +56,7 @@ public static class ParityRender
         return new Color(Mathf.Clamp01(1.60475f * r1 - 0.53108f * g1 - 0.07367f * b1), Mathf.Clamp01(-0.10208f * r1 + 1.10813f * g1 - 0.00605f * b1), Mathf.Clamp01(-0.00327f * r1 - 0.07276f * g1 + 1.07602f * b1), 1);
     }
 
-    static string Env(string k, string d) { var v = Environment.GetEnvironmentVariable(k); return string.IsNullOrEmpty(v) ? d : v; }
+    public static string Env(string k, string d) { var v = Environment.GetEnvironmentVariable(k); return string.IsNullOrEmpty(v) ? d : v; }
     static Color Hex(string h) { ColorUtility.TryParseHtmlString(h, out var c); return c; }
 
     public static void SetupPipeline()

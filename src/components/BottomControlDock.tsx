@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { HairShellEditor } from './HairShellEditor';
 import {
   Camera,
   Check,
@@ -21,6 +22,7 @@ import {
   DEFAULT_BUILDER_BY_PRESET,
   HAIR_PRESETS,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -29,6 +31,35 @@ import {
   ShaderConfig,
   VisionDebugMode,
 } from '../types/hair';
+import { SHEEN_DEFAULTS, type HairSheenSettings } from '../engine/hairShadingModel';
+import { CARD_BAKE_DEFAULTS, type CardBakeSettings } from '../engine/cardBake';
+
+const SHEEN_SLIDERS: [keyof HairSheenSettings, string, number, number, number][] = [
+  ['primaryTint', 'Primary Hair Tint', 0, 1, 0.02],
+  ['secondaryTint', 'Secondary Hair Tint', 0, 1, 0.02],
+  ['sheenStrength', 'Sheen Band', 0, 1.5, 0.02],
+  ['sheenPower', 'Sheen Sharpness', 4, 60, 1],
+  ['sheenShift', 'Sheen Shift', -0.5, 0.5, 0.01],
+  ['sheenTint', 'Sheen Hair Tint', 0, 1, 0.02],
+  ['shiftJitter', 'Highlight Jitter', 0, 1, 0.02],
+  ['specBreakup', 'Highlight Breakup', 0, 1, 0.02],
+  ['flowStrength', 'Strand Flow', 0, 1.5, 0.02],
+  ['shadowLift', 'Shadow Lift', 0, 1, 0.02],
+  ['clumpVariation', 'Clump Variation', 0, 0.5, 0.01],
+  ['tipLighten', 'Tip Lighten', 0, 0.5, 0.01],
+];
+
+const CARD_BAKE_SLIDERS: [keyof CardBakeSettings, string, number, number, number][] = [
+  ['strands', 'Strands', 120, 1200, 10],
+  ['clumps', 'Clumps', 3, 32, 1],
+  ['clumpTightness', 'Clump Tightness', 0, 1, 0.02],
+  ['strandWidthPx', 'Strand Width (px)', 1, 6, 0.1],
+  ['frizz', 'Frizz', 0, 0.02, 0.0005],
+  ['wave', 'Clump Wave', 0, 0.05, 0.001],
+  ['tipStagger', 'Tip Stagger', 0, 1, 0.02],
+  ['strays', 'Stray Strands', 0, 0.3, 0.01],
+  ['seed', 'Bake Seed', 1, 9999, 1],
+];
 
 type DockTab = 'presets' | 'builder' | 'shader' | 'physics' | 'scene' | 'inspect';
 
@@ -38,6 +69,9 @@ interface BottomControlDockProps {
   presetId: HairPresetId;
   onSelectPreset: (id: HairPresetId) => void;
   builderConfig: HairBuilderConfig | null;
+  /** The builder config as the hair is built (with the loaded head's ears), for the shape shell editor. */
+  buildConfig?: HairBuilderConfig | null;
+  onShellPreview?: (shell: HairShellGrid | null) => void;
   customStyleName: string | null;
   onChangeBuilder: (patch: Partial<HairBuilderConfig>) => void;
   onRandomizeStyle: () => void;
@@ -133,6 +167,8 @@ export function BottomControlDock({
   presetId,
   onSelectPreset,
   builderConfig,
+  buildConfig,
+  onShellPreview,
   customStyleName,
   onChangeBuilder,
   onRandomizeStyle,
@@ -169,6 +205,8 @@ export function BottomControlDock({
   const [showImportBox, setShowImportBox] = useState(false);
   const [importDraft, setImportDraft] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  const [shellOpen, setShellOpen] = useState(false);
+  const noPreview = useCallback(() => {}, []);
 
   const activeBuilder: HairBuilderConfig = builderConfig ?? DEFAULT_BUILDER_BY_PRESET[presetId];
 
@@ -525,6 +563,73 @@ export function BottomControlDock({
                   unit="x"
                   onChange={(strandWidth) => onChangeBuilder({ strandWidth })}
                 />
+                <SliderRow
+                  label="Hairline Softness"
+                  value={activeBuilder.hairlineSoftness ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineSoftness) => onChangeBuilder({ hairlineSoftness })}
+                />
+                <SliderRow
+                  label="Hairline Unevenness"
+                  value={activeBuilder.hairlineIrregularity ?? 0.5}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(hairlineIrregularity) => onChangeBuilder({ hairlineIrregularity })}
+                />
+                <SliderRow
+                  label="Fade Height"
+                  value={activeBuilder.fadeHeight ?? 0.4}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeHeight) => onChangeBuilder({ fadeHeight })}
+                />
+                <SliderRow
+                  label="Fade Blend"
+                  value={activeBuilder.fadeBlend ?? 0.75}
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  onChange={(fadeBlend) => onChangeBuilder({ fadeBlend })}
+                />
+                <div className="flex flex-col gap-1">
+                  <ColorSwatchInput
+                    label={activeBuilder.scalpColor ? 'Hairline Tint' : 'Hairline: hair colour'}
+                    value={activeBuilder.scalpColor ?? '#3a2a20'}
+                    onChange={(scalpColor) => onChangeBuilder({ scalpColor })}
+                  />
+                  {activeBuilder.scalpColor && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeBuilder({ scalpColor: undefined })}
+                      className="text-[11px] text-slate-400 hover:text-slate-200 text-left cursor-pointer"
+                    >
+                      Match hair colour
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Shape shell: the outer shape as an editable thickness grid (hairShell.ts) */}
+              <div className="pt-2 border-t border-white/8">
+                <button
+                  type="button"
+                  onClick={() => setShellOpen((o) => !o)}
+                  aria-expanded={shellOpen}
+                  className="text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  {shellOpen ? 'Hide shape shell' : `Shape shell${activeBuilder.shell ? ' (on)' : ''}: edit the outer shape`}
+                </button>
+                {shellOpen && (
+                  <HairShellEditor
+                    config={buildConfig ?? activeBuilder}
+                    onChange={(shell) => onChangeBuilder({ shell })}
+                    onPreview={onShellPreview ?? noPreview}
+                  />
+                )}
               </div>
 
               {/* Row 3: Procedural Generator & Live Sculpt Status */}
@@ -682,7 +787,66 @@ export function BottomControlDock({
                   step={0.01}
                   onChange={(strandVariation) => onChangeShader({ strandVariation })}
                 />
+                <SliderRow
+                  label="Primary Spec"
+                  value={shader.primaryIntensity}
+                  min={0}
+                  max={1.5}
+                  step={0.02}
+                  onChange={(primaryIntensity) => onChangeShader({ primaryIntensity })}
+                />
+                <SliderRow
+                  label="Secondary Gloss"
+                  value={shader.secondaryPower}
+                  min={8}
+                  max={120}
+                  step={1}
+                  onChange={(secondaryPower) => onChangeShader({ secondaryPower })}
+                />
               </div>
+
+              {/* Hair sheen look (engine/hairShadingModel.ts SHEEN_DEFAULTS; docs/SHARED_TOOLS.md "Hair sheen") */}
+              <div className="text-[10px] uppercase tracking-wider text-slate-400">Sheen look</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-3">
+                {SHEEN_SLIDERS.map(([key, label, min, max, step]) => (
+                  <SliderRow
+                    key={key}
+                    label={label}
+                    value={(shader[key] as number | undefined) ?? SHEEN_DEFAULTS[key]}
+                    min={min}
+                    max={max}
+                    step={step}
+                    onChange={(v) => onChangeShader({ [key]: v } as Partial<ShaderConfig>)}
+                  />
+                ))}
+              </div>
+
+              {/* Hair-card strand maps (engine/cardBake.ts; docs/SHARED_TOOLS.md "Hair-card baking") */}
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-slate-400">
+                <span>Card strands</span>
+                <button
+                  type="button"
+                  className="rounded border border-slate-600 px-2 py-0.5 normal-case tracking-normal text-slate-200"
+                  onClick={() => onChangeShader({ cardTextures: shader.cardTextures === 'procedural' ? 'baked' : 'procedural' })}
+                >
+                  {shader.cardTextures === 'procedural' ? 'Procedural (old)' : 'Baked from strands'}
+                </button>
+              </div>
+              {shader.cardTextures !== 'procedural' && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-3">
+                  {CARD_BAKE_SLIDERS.map(([key, label, min, max, step]) => (
+                    <SliderRow
+                      key={key}
+                      label={label}
+                      value={(shader.cardBake?.[key] as number | undefined) ?? CARD_BAKE_DEFAULTS[key]}
+                      min={min}
+                      max={max}
+                      step={step}
+                      onChange={(v) => onChangeShader({ cardBake: { ...(shader.cardBake ?? {}), [key]: v } })}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

@@ -9,7 +9,12 @@ import {
   MotionMode,
   PhysicsConfig,
 } from '../types/hair';
-import { buildCustomHairSpecs, LockBuildSpec } from './hairBuilder';
+import { buildCustomHairSpecs, LockBuildSpec, naturalMaxHairlinePhi, scalpPaintForConfig } from './hairBuilder';
+import { deriveScalpPaint, evalScalpPaint, scalpAngles, type ScalpPaint } from './scalpPaint';
+import { conformPoint, headConformClearance, isBelowHairlineCap, type HeadConformMap } from './characterHead';
+
+// skull of the loaded character head (conformToHead); when set, head collisions use it instead of the mannequin skull
+let _activeConform: HeadConformMap | null = null;
 
 export interface SphereColliderDef {
   localCenter: THREE.Vector3;
@@ -65,6 +70,20 @@ interface VolumetricHairLock {
   ripple?: number;
   /** Bumps along the lock length for ripple (default 9; needs smooth 3-4 to resolve). */
   rippleFreq?: number;
+  /** Optional [from, to]: the part of the root->base->tip colour gradient this lock shows (aGradT). Default [0, 1]. */
+  colorRange?: [number, number];
+  /**
+   * Optional: close-cut hair that keeps its built shape exactly and follows the head rigidly. Skips the rest-pose bake
+   * (head margin, smoothing, inter-lock push) and the live solver. Use for short, densely layered hair (crops, fades)
+   * where the bake would crumple overlapping locks into knots and flakes.
+   */
+  rigid?: boolean;
+  /** Optional 0..1: shading tangent flattened onto the scalp, so close-cut locks shine in bands (LockBuildSpec.surfaceShine). */
+  surfaceShine?: number;
+  /** Optional head-local unit direction the highlight follows with surfaceShine (LockBuildSpec.shadeDir). */
+  shadeDir?: THREE.Vector3;
+  /** Optional 0..1: width of the root end as a fraction of the lock's width (LockBuildSpec.rootWidth). */
+  rootWidth?: number;
   lockNormal: boolean;
   scalpRoot: number;
   restMidR: number;
@@ -204,6 +223,8 @@ function packCellKey(cx: number, cy: number, cz: number): number {
 
 // Precomputed per-node ribbon taper & Verlet physics lookup tables (eliminates ~25k Math.pow/sin calls per frame!)
 const _NODE_ROOT_SIN = new Float32Array(12);
+// width of a lock's root end, as a fraction of its width: rootWidth when set, otherwise by scalpRoot
+const rootMinWOf = (lock: { scalpRoot: number; rootWidth?: number }) => lock.rootWidth ?? (lock.scalpRoot >= 0.5 ? 0.36 : 0.08);
 const _NODE_TIP_TAPER = new Float32Array(12);
 const _NODE_BASE_TIP_TAPER = new Float32Array(12);
 const _NODE_THICK_FACTOR = new Float32Array(12);
@@ -414,6 +435,10 @@ function computeHeadClearanceMeters(
 ): number {
   _vLocal.copy(worldPos).sub(headPos).applyQuaternion(invHeadQuat);
   const y = _vLocal.y;
+  if (_activeConform) {
+    const c = headConformClearance(_activeConform, _vLocal, (az) => naturalMaxHairlinePhi(az) + 0.1);
+    if (c !== null) return c;
+  }
 
   // 1. Signed radial distance from the smooth upper skull ellipsoid (bustModel.ts inner scalp + cranium)
   const sRx = 0.275;
@@ -2499,6 +2524,11 @@ function locksFromSpecs(specs: LockBuildSpec[], seed: number): VolumetricHairLoc
       tipWidth: (sp as any).tipWidth,
       ripple: (sp as any).ripple,
       rippleFreq: (sp as any).rippleFreq,
+      colorRange: (sp as any).colorRange,
+      rigid: (sp as any).rigid === true || undefined,
+      surfaceShine: (sp as any).surfaceShine > 0 ? Math.min(1, (sp as any).surfaceShine) : undefined,
+      shadeDir: (sp as any).shadeDir ? (sp as any).shadeDir.clone().normalize() : undefined,
+      rootWidth: (sp as any).rootWidth !== undefined ? Math.max(0.05, Math.min(1, (sp as any).rootWidth)) : undefined,
       lockNormal: Boolean(sp.lockNormal),
       scalpRoot: sp.scalpRoot ?? 0.65,
       restMidR: 0,
@@ -2527,6 +2557,7 @@ function bakeCollisionFreeRestPose(locks: VolumetricHairLock[]): void {
     for (let k = 0; k < ps.length; k++) {
       ps[k].pos.copy(ps[k].restLocal).add(_neutralHeadPos);
     }
+    if (lock.rigid) continue; // close-cut: keeps its built shape
 
     // Prevent roots from being buried inside skull OR floating detached off the scalp canopy
     if (!lock.isBaseShell) {
@@ -2684,10 +2715,11 @@ function bakeInterLockRestPose(
 
     for (let s = 0; s < locks.length; s++) {
       const lock = locks[s];
+      if (lock.rigid) continue; // close-cut locks neither push nor get pushed
       const ps = lock.particles;
       const base = s * NODES_PER_LOCK;
       const isBase = lock.isBaseShell;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const invMass = 1.0 / (lock.mass * massScale);
       const layer = isBase ? 0 : lock.layerOrder;
       const rootY = ps[0].rawRestLocal.y;
@@ -2959,7 +2991,7 @@ function bakeInterLockRestPose(
     // Re-clamp radial silhouette envelope (scales naturally with widthScale!), smooth curvature, lengths & head/bust colliders
     for (let s = 0; s < locks.length; s++) {
       const lock = locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const base = s * NODES_PER_LOCK;
       const maxLift = (lock.lockNormal ? 0.056 : 0.082) + swellExtra;
@@ -3058,7 +3090,7 @@ function bakeInterLockRestPose(
     const lock = locks[s];
     const ps = lock.particles;
     const base = s * NODES_PER_LOCK;
-    if (!lock.isBaseShell) {
+    if (!lock.isBaseShell && !lock.rigid) {
       const isCrownRoot = !lock.lockNormal && workY[base] - _neutralHeadPos.y > 0.65;
       const yCap1 = workY[base] + 0.004;
       for (let kp = 0; kp < 4; kp++) {
@@ -3200,6 +3232,8 @@ export class HairPhysicsSystem {
   private impulseVel = new THREE.Vector3();
   private simTime = 0;
   private lastWidthScale = 1.0;
+  /** Painted short-hair layer under the locks for the current builder style (null for legacy presets). See scalpPaint.ts. */
+  public scalpPaint: ScalpPaint | null = null;
   private bakedWidthScale = 1.0;
 
   constructor(material: THREE.ShaderMaterial, initialPreset: HairPresetId) {
@@ -3241,6 +3275,7 @@ export class HairPhysicsSystem {
     this.isCustomBuilder = false;
     this.locks = generateLocksForPreset(preset);
     bakeCollisionFreeRestPose(this.locks);
+    this.scalpPaint = deriveScalpPaint(this.locks.map((l) => ({ pointsLocal: l.particles.map((p) => p.restLocal) })), naturalMaxHairlinePhi);
     this.bakedWidthScale = 1.0;
     this.lastWidthScale = 1.0;
     this.buildCohesionGraph();
@@ -3255,6 +3290,7 @@ export class HairPhysicsSystem {
     this.activePreset = basePreset;
     this.isCustomBuilder = true;
     const specs = buildCustomHairSpecs(config);
+    this.scalpPaint = scalpPaintForConfig(config, specs);
     this.locks = locksFromSpecs(specs, config.seed || 1337);
     bakeCollisionFreeRestPose(this.locks);
     this.bakedWidthScale = 1.0;
@@ -3294,7 +3330,7 @@ export class HairPhysicsSystem {
 
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       for (let k = 2; k < ps.length; k++) {
         if (entryCount >= MAX_HASH_ENTRIES) break;
@@ -3476,6 +3512,8 @@ export class HairPhysicsSystem {
     const layerAOs = new Float32Array(totalVerts);
     const cardMasks = new Float32Array(totalVerts);
     const scalpRoots = new Float32Array(totalVerts);
+    // colour gradient coordinate: uv.y unless the lock shows only part of the gradient (colorRange)
+    const gradTs = new Float32Array(totalVerts);
     const indices = new Uint32Array(totalIndices);
 
     let vOffset = 0;
@@ -3487,6 +3525,7 @@ export class HairPhysicsSystem {
       const ringsPerLock = this.lockRingCount[s];
       const lockSm = this.lockSmooth[s];
       const maskVal = lock.isBaseShell ? 0.0 : lock.isFadeCap ? (lock.fadeStart !== undefined ? Math.fround(0.16 + 0.28 * Math.min(1, Math.max(0, lock.fadeStart))) : 0.25) : 1.0;
+      const cr0 = lock.colorRange ? lock.colorRange[0] : 0, cr1 = lock.colorRange ? lock.colorRange[1] : 1;
 
       for (let k = 0; k < ringsPerLock; k++) {
         const vCoord = (k / lockSm) / (NODES_PER_LOCK - 1);
@@ -3498,6 +3537,7 @@ export class HairPhysicsSystem {
           layerAOs[vOffset] = lock.layerAO * undersideShade;
           cardMasks[vOffset] = maskVal;
           scalpRoots[vOffset] = lock.scalpRoot;
+          gradTs[vOffset] = cr0 + (cr1 - cr0) * vCoord;
           vOffset++;
         }
 
@@ -3528,6 +3568,7 @@ export class HairPhysicsSystem {
       layerAOs[vOffset] = lock.layerAO;
       cardMasks[vOffset] = maskVal;
       scalpRoots[vOffset] = lock.scalpRoot;
+      gradTs[vOffset] = cr1;
       vOffset++;
 
       const lastRow = baseVertex + (ringsPerLock - 1) * RING_VERTS;
@@ -3550,6 +3591,7 @@ export class HairPhysicsSystem {
     this.geometry.setAttribute('aCardMask', new THREE.BufferAttribute(cardMasks, 1));
     this.geometry.setAttribute('aClearance', new THREE.BufferAttribute(this.clearances, 1));
     this.geometry.setAttribute('aScalpRoot', new THREE.BufferAttribute(scalpRoots, 1));
+    this.geometry.setAttribute('aGradT', new THREE.BufferAttribute(gradTs, 1));
     this.geometry.setAttribute('aInstability', new THREE.BufferAttribute(this.instabilities, 1));
     this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     this.hairMesh.geometry = this.geometry;
@@ -3560,6 +3602,27 @@ export class HairPhysicsSystem {
     const boneGeo = new THREE.BufferGeometry();
     boneGeo.setAttribute('position', new THREE.BufferAttribute(this.boneLinePositions, 3));
     this.boneDebugLines.geometry = boneGeo;
+  }
+
+  /**
+   * Fits the built hair to a character's real skull (see characterHead.ts conformPoint): every rest node moves out or in
+   * by how far the skull stands out from (or sits inside) the web scalp ellipsoid there, and head collisions use that skull. Call after a load; pass null to undo. Call
+   * snapToHead afterwards to refresh positions and the mesh.
+   */
+  public conformToHead(map: HeadConformMap | null): void {
+    _activeConform = map;
+    for (const lock of this.locks) {
+      const ps = lock.particles as any[];
+      for (const pt of ps) {
+        if (!pt.builtRest) pt.builtRest = pt.restLocal.clone();
+        pt.restLocal.copy(pt.builtRest);
+      }
+      if (!map) continue;
+      // short hair that stays on the scalp follows the real skull both ways; a lock that hangs past the hairline only
+      // moves out, so its lower part stays clear of the mannequin neck and face collider
+      const hangs = ps.some((pt) => isBelowHairlineCap(pt.restLocal, naturalMaxHairlinePhi));
+      for (const pt of ps) conformPoint(map, pt.restLocal, naturalMaxHairlinePhi, !hangs);
+    }
   }
 
   public snapToHead(headPivot: THREE.Object3D, widthScale = this.lastWidthScale): void {
@@ -3638,8 +3701,10 @@ export class HairPhysicsSystem {
         if (!lock.lockNormal && rootClearM > 0.044) {
           floatingRootCount++;
         }
-        // Flag crown dome hooks (non-spike top dome strand rising >10mm vertically above root at k=1)
-        if (!lock.lockNormal && particles[0].restLocal.y > 0.67) {
+        // Flag crown dome hooks (non-spike top dome strand rising >10mm vertically above root at k=1). Rigid locks are
+        // skipped: they keep the shape they were built with (a crop's root rising out of the scalp, a quiff), so a rise
+        // there is the design, not the solver hooking a strand up
+        if (!lock.lockNormal && !lock.rigid && particles[0].restLocal.y > 0.67) {
           _vLocal.copy(particles[1].pos).sub(_headWorldPos).applyQuaternion(_invHeadWorldQuat);
           if (_vLocal.y - particles[0].restLocal.y > 0.01) {
             crownHookCount++;
@@ -3726,6 +3791,12 @@ export class HairPhysicsSystem {
           }
         }
       }
+      // painted short hair (fades, sideburns) covers the scalp too: count points the scalp paint fills at least half
+      if (!covered && this.scalpPaint) {
+        const sp = SCALP_AUDIT_POINTS[i];
+        const a = scalpAngles(sp.x, sp.y, sp.z);
+        covered = evalScalpPaint(this.scalpPaint, a.az, a.phi) >= 0.5;
+      }
       if (covered) coveredScalpPts++;
     }
     const scalpCoveragePct =
@@ -3756,9 +3827,9 @@ export class HairPhysicsSystem {
     let entryCount = 0;
     for (let s = 0; s < this.locks.length; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       for (let k = 2; k < ps.length; k++) {
         if (entryCount >= MAX_HASH_ENTRIES) break;
         const p = ps[k].pos;
@@ -3982,7 +4053,7 @@ export class HairPhysicsSystem {
     // Snapshot per-node frame velocities
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const baseIdx = s * NODES_PER_LOCK;
       for (let k = 2; k < ps.length; k++) {
@@ -3997,7 +4068,7 @@ export class HairPhysicsSystem {
     // Apply weighted neighbor momentum sharing (purely dissipative, zero energy gain, zero bounce!)
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
       const baseIdx = s * NODES_PER_LOCK;
       for (let k = 2; k < ps.length; k++) {
@@ -4074,9 +4145,9 @@ export class HairPhysicsSystem {
 
     for (let s = 0; s < lockCount; s++) {
       const lock = this.locks[s];
-      if (lock.isBaseShell) continue;
+      if (lock.isBaseShell || lock.rigid) continue;
       const ps = lock.particles;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const invMass = 1.0 / (lock.mass * massScale);
       const layer = lock.layerOrder;
       const rootY = ps[0].rawRestLocal.y;
@@ -4769,6 +4840,18 @@ export class HairPhysicsSystem {
         const p0z = m20 * r0.x + m21 * r0.y + m22 * r0.z + hpz;
         particles[0].pos.set(p0x, p0y, p0z);
         particles[0].prevPos.set(p0x, p0y, p0z);
+        if (lock.rigid) {
+          // close-cut: every node follows the head rigidly at its built rest position
+          for (let k = 1; k < pLen; k++) {
+            const rl = particles[k].restLocal;
+            const x = m00 * rl.x + m01 * rl.y + m02 * rl.z + hpx;
+            const y = m10 * rl.x + m11 * rl.y + m12 * rl.z + hpy;
+            const z = m20 * rl.x + m21 * rl.y + m22 * rl.z + hpz;
+            particles[k].pos.set(x, y, z);
+            particles[k].prevPos.set(x, y, z);
+          }
+          continue;
+        }
 
         for (let k = 1; k < pLen; k++) {
           const p = particles[k];
@@ -5169,11 +5252,26 @@ export class HairPhysicsSystem {
       }
       const isBase = lock.isBaseShell;
       const lockNormal = lock.lockNormal;
-      const rootMinW = lock.scalpRoot >= 0.5 ? 0.36 : 0.08;
+      const rootMinW = rootMinWOf(lock);
       const effWidthScale = isBase ? 1.0 : widthScale;
       const effThickScale = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effWidthScale);
       const baseHalfW = lock.baseWidth * 0.5 * effWidthScale;
       const baseHalfT = lock.baseThickness * 0.5 * effThickScale;
+      const shine = lock.surfaceShine ?? 0;
+      // the lock's overall direction (root to tip): with surfaceShine the shading tangent leans to it, so a lock that bends
+      // (a side lock turning from back to down, a tip lifting off the surface) keeps one highlight along its length
+      // instead of going dark where it bends away from the light
+      let chx = 0, chy = 0, chz = 0;
+      if (shine > 0 && lock.shadeDir) {
+        // (a shadeDir from the builder: the comb direction there, shared by neighbouring locks, so they shine together)
+        const sd = lock.shadeDir;
+        chx = m00 * sd.x + m01 * sd.y + m02 * sd.z; chy = m10 * sd.x + m11 * sd.y + m12 * sd.z; chz = m20 * sd.x + m21 * sd.y + m22 * sd.z;
+      } else if (shine > 0) {
+        const p0 = particles[0].pos, p1 = particles[particles.length - 1].pos;
+        chx = p1.x - p0.x; chy = p1.y - p0.y; chz = p1.z - p0.z;
+        const cl = Math.sqrt(chx * chx + chy * chy + chz * chz);
+        if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+      }
 
       const rn = lock.rootNormalLocal;
       let odx = m00 * rn.x + m01 * rn.y + m02 * rn.z;
@@ -5226,6 +5324,16 @@ export class HairPhysicsSystem {
         let hnz = pz0 - hcz;
         const hnInv = 1.0 / (Math.sqrt(hnx * hnx + hny * hny + hnz * hnz) || 1.0);
         hnx *= hnInv; hny *= hnInv; hnz *= hnInv;
+        // shading tangent: with surfaceShine, the lock's direction along the scalp (its rise off the skin removed), so
+        // close-cut locks shine together in bands instead of each catching the light at its own bend
+        let stx = tx, sty = ty, stz = tz;
+        if (shine > 0) {
+          if (chx !== 0 || chy !== 0 || chz !== 0) { stx += (chx - stx) * shine; sty += (chy - sty) * shine; stz += (chz - stz) * shine; }
+          const tn = (stx * hnx + sty * hny + stz * hnz) * shine;
+          stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
+          const sl = Math.sqrt(stx * stx + sty * sty + stz * stz);
+          if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
+        }
 
         let sx: number, sy: number, sz: number;
         if (!lockNormal) {
@@ -5298,9 +5406,9 @@ export class HairPhysicsSystem {
           headNormals[o + 1] = hny;
           headNormals[o + 2] = hnz;
 
-          tangents[o] = tx;
-          tangents[o + 1] = ty;
-          tangents[o + 2] = tz;
+          tangents[o] = stx;
+          tangents[o + 1] = sty;
+          tangents[o + 2] = stz;
 
           vIdx++;
         }
@@ -5347,6 +5455,13 @@ export class HairPhysicsSystem {
       headNormals[tipO + 1] = thny;
       headNormals[tipO + 2] = thnz;
 
+      if (shine > 0) {
+        if (chx !== 0 || chy !== 0 || chz !== 0) { ttx += (chx - ttx) * shine; tty += (chy - tty) * shine; ttz += (chz - ttz) * shine; }
+        const tn = (ttx * thnx + tty * thny + ttz * thnz) * shine;
+        const fx = ttx - thnx * tn, fy = tty - thny * tn, fz = ttz - thnz * tn;
+        const fl = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (fl > 1e-4) { ttx = fx / fl; tty = fy / fl; ttz = fz / fl; }
+      }
       tangents[tipO] = ttx;
       tangents[tipO + 1] = tty;
       tangents[tipO + 2] = ttz;

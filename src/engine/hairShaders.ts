@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BackdropMode, LightingPresetId, ShaderConfig, VisionDebugMode } from '../types/hair';
 import { HairTexturePack } from './hairTextures';
+import { resolveSheen, type HairSheenSettings } from './hairShadingModel';
 
 export interface LightingRigSpec {
   bgHex: string;
@@ -95,6 +96,7 @@ const VERTEX_SHADER = /* glsl */ `
   attribute float aCardMask;
   attribute float aClearance;
   attribute float aScalpRoot;
+  attribute float aGradT;
   attribute float aInstability;
 
   varying vec2 vUv;
@@ -107,6 +109,7 @@ const VERTEX_SHADER = /* glsl */ `
   varying float vCardMask;
   varying float vClearance;
   varying float vScalpRoot;
+  varying float vGradT;
   varying float vInstability;
 
   void main() {
@@ -116,6 +119,7 @@ const VERTEX_SHADER = /* glsl */ `
     vCardMask = aCardMask;
     vClearance = aClearance;
     vScalpRoot = aScalpRoot;
+    vGradT = aGradT;
     vInstability = aInstability;
 
     vec4 worldPos = modelMatrix * vec4(position, 1.0);
@@ -137,6 +141,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uFlowIdMap;
   uniform sampler2D uNormalMap;
   uniform sampler2D uAlphaMap;
+  uniform sampler2D uStrandFlowMap;
 
   uniform vec3 uRootColor;
   uniform vec3 uBaseColor;
@@ -165,6 +170,14 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uClumpVariation;
   uniform float uTipLighten;
   uniform float uDebugMode;
+  // SHEEN v2 settings (hairShadingModel.ts HairSheenSettings)
+  uniform float uPrimaryTint;
+  uniform float uSecondaryTint;
+  uniform float uSheenShift;
+  uniform float uSheenTint;
+  uniform float uShiftJitter;
+  uniform float uSpecBreakup;
+  uniform float uFlowStrength;
 
   uniform vec3 uKeyDir;
   uniform vec3 uKeyColor;
@@ -184,6 +197,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   varying float vCardMask;
   varying float vClearance;
   varying float vScalpRoot;
+  varying float vGradT;
   varying float vInstability;
 
   vec3 shiftTangent(vec3 T, vec3 N, float shift) {
@@ -331,10 +345,12 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     // Smooth 3-Stop Root -> Base -> Tip Gradient:
     // Full dark root shadow only on true scalp/hairline roots (vScalpRoot = 1.0); shingled mid-back tiers blend seamlessly!
+    // the colour gradient runs on aGradT (= uv.y unless the lock shows only part of it: LockBuildSpec.colorRange)
+    float gt = clamp(vGradT, 0.0, 1.0);
     vec3 effRootColor = mix(uBaseColor, uRootColor, vScalpRoot);
-    vec3 gradColor = t < 0.28
-      ? mix(effRootColor, uBaseColor, smoothstep(0.0, 0.28, t))
-      : mix(uBaseColor, uTipColor, smoothstep(0.28, 1.0, t));
+    vec3 gradColor = gt < 0.28
+      ? mix(effRootColor, uBaseColor, smoothstep(0.0, 0.28, gt))
+      : mix(uBaseColor, uTipColor, smoothstep(0.28, 1.0, gt));
 
     // Natural multi-filament tonal variation
     float fiberTone = (flowId.r - 0.5) * 0.92 + (vStrandSeed - 0.5) * 0.32;
@@ -379,14 +395,22 @@ const FRAGMENT_SHADER = /* glsl */ `
       uRimColor * ndlBack * 0.56
     ) * aoD;
 
-    // Velvety Multi-Strand Kajiya-Kay Dual-Lobe Anisotropic Specular (silky natural sheen, zero plastic glare)
-    float shiftTex = (flowId.b - 0.5) * 0.38 + (vStrandSeed - 0.5) * 0.12;
-    vec3 t1 = shiftTangent(T, perturbedN, uPrimaryShift + shiftTex);
-    vec3 t2 = shiftTangent(T, perturbedN, uSecondaryShift + shiftTex * 1.2);
+    // ---- SHEEN v2 (mirrors hairShadingModel.ts shadeHairPixel and the Unity shader) ----
+    // Kajiya-Kay dual highlight along the strand: a sharp primary (primarySpecColor, little hair colour) and a wide
+    // hair-coloured secondary, plus a soft wide sheen band. The highlight tangent follows the baked strand direction
+    // (uStrandFlowMap rg) so it breaks along real strands; per-strand shift noise is scaled by uShiftJitter.
+    vec2 strandFlow = texture2D(uStrandFlowMap, sampleUv).rg * 2.0 - 1.0;
+    vec3 Tb = normalize(T * max(0.05, strandFlow.y) + B * strandFlow.x * uFlowStrength);
+    float shiftTex = ((flowId.b - 0.5) * 0.38 + (vStrandSeed - 0.5) * 0.12) * uShiftJitter;
+    vec3 t1 = shiftTangent(Tb, perturbedN, uPrimaryShift + shiftTex);
+    vec3 t2 = shiftTangent(Tb, perturbedN, uSecondaryShift + shiftTex * 1.2);
 
     float fiberCrest = smoothstep(0.42, 0.92, grooveAo);
     float microGlint = 0.74 + 0.26 * smoothstep(0.28, 0.86, flowId.r);
-    float specMask = smoothstep(0.08, 0.24, t) * (0.24 + 0.76 * fiberCrest) * microGlint * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
+    float breakup = mix(1.0, (0.24 + 0.76 * fiberCrest) * microGlint, uSpecBreakup);
+    // (no highlight on a root at the skin; a lock with a light root (scalpRoot < 0.5) lies on other hair and keeps its
+    // highlight to the root, so a root left uncovered at a crop's edge isn't a dark dash)
+    float specMask = mix(1.0, smoothstep(0.08, 0.24, t), smoothstep(0.0, 0.5, vScalpRoot)) * breakup * mix(0.62, 1.0, vLayerAO) * mix(1.0, 0.35, fadeMask);
     float keyFacing = smoothstep(-0.14, 0.48, dot(baseN, LKey));
     float backFacing = smoothstep(-0.14, 0.48, dot(baseN, LRim));
 
@@ -394,19 +418,17 @@ const FRAGMENT_SHADER = /* glsl */ `
     float spec2 = strandSpecular(t2, V, LKey, uSecondaryPower) * uSecondaryIntensity;
     float backSpec = strandSpecular(t1, V, LRim, uPrimaryPower * 0.78) * uPrimaryIntensity * 0.54;
 
-    // Albedo-harmonized soft silk sheen
-    vec3 spec1Tint = mix(albedo * 1.55, uPrimarySpecColor, 0.48);
-    vec3 spec2Tint = mix(albedo * 1.35, uSecondarySpecColor, 0.48);
+    vec3 spec1Tint = mix(uPrimarySpecColor, albedo * 1.55, uPrimaryTint);
+    vec3 spec2Tint = mix(uSecondarySpecColor, albedo * 1.35, uSecondaryTint);
 
     vec3 specular = (
-      (spec1Tint * spec1 * 0.56 + spec2Tint * spec2 * 0.44) * uKeyColor * keyFacing +
+      (spec1Tint * spec1 + spec2Tint * spec2) * uKeyColor * keyFacing +
       spec1Tint * backSpec * uRimColor * backFacing
     ) * specMask * rootOcclusion;
 
-    // Soft wide anisotropic sheen band (third Kajiya-Kay lobe, smooth mask: no per-fibre striping)
-    vec3 tS = shiftTangent(T, perturbedN, 0.02 + shiftTex * 0.5);
-    float sheenMask = smoothstep(0.08, 0.30, t) * (0.7 + 0.3 * fiberCrest) * mix(0.6, 1.0, vLayerAO) * (1.0 - fadeMask);
-    vec3 sheenTint = mix(albedo * 2.4, uPrimarySpecColor, 0.40);
+    vec3 tS = shiftTangent(Tb, perturbedN, uSheenShift + shiftTex * 0.5);
+    float sheenMask = smoothstep(0.08, 0.30, t) * mix(1.0, 0.7 + 0.3 * fiberCrest, uSpecBreakup) * mix(0.6, 1.0, vLayerAO) * (1.0 - fadeMask);
+    vec3 sheenTint = mix(uPrimarySpecColor, albedo * 2.4, uSheenTint);
     specular += sheenTint * sheenMask * uSheenBand * (
       strandSpecular(tS, V, LKey, uSheenPower) * uKeyColor * keyFacing +
       strandSpecular(tS, V, LRim, uSheenPower) * uRimColor * backFacing * 0.6);
@@ -445,6 +467,7 @@ export function createHairShaderMaterial(
       uFlowIdMap: { value: textures.flowIdTexture },
       uNormalMap: { value: textures.normalTexture },
       uAlphaMap: { value: textures.alphaCardTexture },
+      uStrandFlowMap: { value: textures.flowTexture },
 
       uRootColor: { value: new THREE.Color(config.rootColor) },
       uBaseColor: { value: new THREE.Color(config.baseColor) },
@@ -467,11 +490,19 @@ export function createHairShaderMaterial(
       uFadeOpacity: { value: 0.85 },
       uFadeSoftness: { value: 0.85 },
       uFadeReach: { value: 0.45 },
-      uSheenBand: { value: 0.30 },
-      uSheenPower: { value: 14.0 },
-      uShadowLift: { value: 0.30 },
-      uClumpVariation: { value: 0.20 },
-      uTipLighten: { value: 0.12 },
+      // look settings (recipe shader.*, defaults SHEEN_DEFAULTS); set by applySheenUniforms below
+      uSheenBand: { value: 0 },
+      uSheenPower: { value: 10 },
+      uShadowLift: { value: 0 },
+      uClumpVariation: { value: 0 },
+      uTipLighten: { value: 0 },
+      uPrimaryTint: { value: 0 },
+      uSecondaryTint: { value: 0 },
+      uSheenShift: { value: 0 },
+      uSheenTint: { value: 0 },
+      uShiftJitter: { value: 0 },
+      uSpecBreakup: { value: 0 },
+      uFlowStrength: { value: 0 },
       uDebugMode: { value: VISION_DEBUG_MODE_INDEX[debugMode] },
 
       uKeyDir: { value: new THREE.Vector3(...rig.keyDir).normalize() },
@@ -483,8 +514,26 @@ export function createHairShaderMaterial(
       uAmbientColor: { value: new THREE.Color(rig.hemiSky).multiplyScalar(rig.hemiIntensity * 0.48) },
     },
   });
+  applySheenUniforms(material, resolveSheen(config));
 
   return material;
+}
+
+/** Writes the sheen / look settings (HairSheenSettings) into the hair material's uniforms. */
+export function applySheenUniforms(material: THREE.ShaderMaterial, sh: HairSheenSettings): void {
+  const u = material.uniforms;
+  u.uSheenBand.value = sh.sheenStrength;
+  u.uSheenPower.value = sh.sheenPower;
+  u.uSheenShift.value = sh.sheenShift;
+  u.uSheenTint.value = sh.sheenTint;
+  u.uShadowLift.value = sh.shadowLift;
+  u.uClumpVariation.value = sh.clumpVariation;
+  u.uTipLighten.value = sh.tipLighten;
+  u.uPrimaryTint.value = sh.primaryTint;
+  u.uSecondaryTint.value = sh.secondaryTint;
+  u.uShiftJitter.value = sh.shiftJitter;
+  u.uSpecBreakup.value = sh.specBreakup;
+  u.uFlowStrength.value = sh.flowStrength;
 }
 
 export function syncHairShaderUniforms(
@@ -515,6 +564,7 @@ export function syncHairShaderUniforms(
   u.uGrooveDepth.value = config.grooveDepth;
   u.uStrandVariation.value = config.strandVariation;
   u.uDebugMode.value = VISION_DEBUG_MODE_INDEX[debugMode];
+  applySheenUniforms(material, resolveSheen(config));
 
   u.uKeyDir.value.set(...rig.keyDir).normalize();
   u.uKeyColor.value.set(rig.keyColor).multiplyScalar(rig.keyIntensity * 0.42);

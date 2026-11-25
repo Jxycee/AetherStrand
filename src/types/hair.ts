@@ -50,6 +50,22 @@ export type HairBuilderArchetype =
   | 'rope-locs'
   | 'coily-afro';
 
+/**
+ * The outer shape of a hairstyle as a thickness grid over the scalp (see hairShell.ts). Plain JSON: an AI or a person can
+ * read and edit it directly. mm[row][col] is the target height of the hair surface above the scalp in scene mm at
+ * phiDeg[row] (degrees down from the crown: 0 top, ~95 temples, ~125 ear lobe, ~135 nape) and azDeg[col] (degrees around
+ * from the front: 0 forehead, 90 over the ear, 180 back). null leaves that cell as built.
+ */
+export interface HairShellGrid {
+  azDeg: number[];
+  phiDeg: number[];
+  mm: (number | null)[][];
+  /** 0..1: how far the hair moves to the shell (default 1). */
+  strength?: number;
+  /** Default true: one grid for both sides (azDeg 0..180). false: azDeg runs -180..180, positive = the +x side (the character's left). */
+  mirror?: boolean;
+}
+
 export interface HairBuilderConfig {
   archetype: HairBuilderArchetype;
   partPosition: number; // -1 (deep left) to +1 (deep right), 0 = center
@@ -63,6 +79,34 @@ export interface HairBuilderConfig {
   density: number;      // 0.65 to 1.25
   strandWidth: number;  // 0.75 to 1.25
   seed: number;
+  /**
+   * Optional, 0 to 1: how far up the sides a painted fade climbs (0 = a tight band at the cut line, 1 = up to where the
+   * top hair starts). Used by styles with a painted fade (see fadeScalpPaint in hairBuilder.ts). Default 0.4.
+   */
+  fadeHeight?: number;
+  /** 0..1: fade blend width (fadeScalpPaint `blend`): longer, smoother gradient into the short sides. Default per style. */
+  fadeBlend?: number;
+  /**
+   * Optional, 0 to 1: how softly the painted hairline (and any fade edge) blends into the skin, every style.
+   * 0 = crisp barbered edge, 1 = very soft and wispy. Default 0.5. See applyHairlineLook in scalpPaint.ts.
+   */
+  hairlineSoftness?: number;
+  /** Optional, 0 to 1: unevenness of the painted hairline edge (0 = a clean drawn curve). Default 0.5. */
+  hairlineIrregularity?: number;
+  /**
+   * Optional '#rrggbb': colour of the painted hair at the hairline, fade and sideburns. Leave unset to match the hair's
+   * own colour (root-to-base tone); set it to tint the hairline differently (e.g. greyer temples).
+   */
+  scalpColor?: string;
+  /**
+   * Optional: where the ears are on the head the hair is built for, in web scalp coordinates (theta = |azimuth| from the
+   * front, phi = polar angle from the crown). Sideburns, the arch over the ear, fades and nape lines follow it. The web app
+   * fills it from a loaded character head (measureHeadLandmarks in characterHead.ts); without it the builder uses its
+   * defaults (Tobin's head). Carried in recipes, so an export is built for the same ears it was previewed on.
+   */
+  earLandmarks?: { earFrontTheta: number; earBackTheta: number; earCenterTheta: number; earTopPhi: number; earMidPhi: number; earLobePhi: number; napePhi?: number };
+  /** Optional outer-shape grid (hairShell.ts): moves the built locks in or out so the hair surface meets it. */
+  shell?: HairShellGrid;
 }
 
 export interface ShaderConfig {
@@ -82,6 +126,22 @@ export interface ShaderConfig {
   rootAO: number;             // 0 to 1.0
   grooveDepth: number;        // 0.1 to 1.0
   strandVariation: number;    // 0 to 0.40
+  // ---- hair sheen look (optional; missing = SHEEN_DEFAULTS in engine/hairShadingModel.ts; docs/SHARED_TOOLS.md "Hair sheen")
+  primaryTint?: number;       // 0 to 1: primary highlight takes the hair colour (0 = pure primarySpecColor)
+  secondaryTint?: number;     // 0 to 1: same for the wide secondary highlight
+  sheenStrength?: number;     // 0 to 1.5: soft wide sheen band under the two highlights
+  sheenPower?: number;        // 4 to 60: sheen band sharpness (low = wider)
+  sheenShift?: number;        // -0.5 to 0.5: sheen band shift along the strand
+  sheenTint?: number;         // 0 to 1: sheen band takes the hair colour
+  shiftJitter?: number;       // 0 to 1: per-strand highlight shift noise (0 = one clean band per lock)
+  specBreakup?: number;       // 0 to 1: strand grooves break the highlight up
+  flowStrength?: number;      // 0 to 1.5: baked strand directions bend the highlight
+  shadowLift?: number;        // 0 to 1: AO only partly darkens (keeps shaded hair coloured)
+  clumpVariation?: number;    // 0 to 0.5: per-lock brightness / warmth variation
+  tipLighten?: number;        // 0 to 0.5: lighter tips
+  // ---- hair-card strand maps (engine/cardBake.ts; docs/SHARED_TOOLS.md "Hair-card baking")
+  cardTextures?: 'baked' | 'procedural'; // default 'baked'
+  cardBake?: Partial<import('../engine/cardBake').CardBakeSettings>;
 }
 
 export interface PhysicsConfig {

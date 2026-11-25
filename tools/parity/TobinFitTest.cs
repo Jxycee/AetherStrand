@@ -61,7 +61,7 @@ public static class TobinFitTest
         var smr = (SkinnedMeshRenderer)genT.GetMethod("GenerateAndAttach", BindingFlags.Public | BindingFlags.Static)
             .Invoke(null, new object[] { tobin, p, geo, "Assets/Parity/Hair_" + tag + ".asset", matA });
         if (smr == null) throw new Exception("GenerateAndAttach null");
-        { var evr = HairEval.Evaluate(tobin, head, smr.sharedMesh); var evs = tag + " " + evr; Debug.Log("HAIREVALRESULT " + evs); File.AppendAllText("<scratch>/parity_out/eval_k3.txt", evs + "\n"); }
+        { var evr = HairEval.Evaluate(tobin, head, smr.sharedMesh); var evs = tag + " " + evr; Debug.Log("HAIREVALRESULT " + evs); File.AppendAllText(outDir + "/eval_k3.txt", evs + "\n"); }
         Debug.Log("TOBIN hair bounds(world) " + smr.bounds.center + " size " + smr.bounds.size);
 
         Color bg; ColorUtility.TryParseHtmlString(rig.bg, out bg);

@@ -79,6 +79,9 @@ namespace AetherStrand
                 int bv = vertBase[s];
                 int rings = ringCount[s], sm1 = lockSm[s];
                 float mask = d.isBaseShell ? 0f : d.isFadeCap ? (double.IsNaN(d.fadeStart) ? 0.25f : 0.16f + 0.28f * Mathf.Clamp01((float)d.fadeStart)) : 1f;
+                // uv2.y: colour gradient coordinate + 1 when the lock shows only part of the gradient (web colorRange / aGradT), else 0
+                bool hasCr = !double.IsNaN(d.colorFrom) && !double.IsNaN(d.colorTo);
+                float cr0 = hasCr ? (float)d.colorFrom : 0f, cr1 = hasCr ? (float)d.colorTo : 1f;
                 int vi = bv;
                 for (int k = 0; k < rings; k++)
                 {
@@ -86,14 +89,14 @@ namespace AetherStrand
                     for (int r = 0; r < RingVerts; r++)
                     {
                         uv[vi] = new Vector2(PU[r], t);
-                        uv2[vi] = new Vector2((float)d.scalpRoot, 0f);
+                        uv2[vi] = new Vector2((float)d.scalpRoot, hasCr ? 1f + cr0 + (cr1 - cr0) * t : 0f);
                         float under = PY[r] < -0.1 ? 0.85f : 1.0f;
                         { float sd = Mathf.Clamp01((float)d.seed) * 255f, sh = Mathf.Floor(sd); col[vi] = new Color(sd - sh, (float)d.layerAO * under, sh / 255f, mask); }
                         vi++;
                     }
                 }
                 int tip = vi;
-                uv[tip] = new Vector2(0.5f, 1f); uv2[tip] = new Vector2((float)d.scalpRoot, 0f);
+                uv[tip] = new Vector2(0.5f, 1f); uv2[tip] = new Vector2((float)d.scalpRoot, hasCr ? 1f + cr1 : 0f);
                 { float sd = Mathf.Clamp01((float)d.seed) * 255f, sh = Mathf.Floor(sd); col[tip] = new Color(sd - sh, (float)d.layerAO, sh / 255f, mask); }
                 for (int k = 0; k < rings - 1; k++)
                 {
@@ -178,7 +181,7 @@ namespace AetherStrand
                 var lk = locks[s];
                 int b = s * AetherStrandWebSolver.N;
                 bool isBase = lk.isBaseShell, lockNormal = lk.lockNormal;
-                double rootMinW = lk.scalpRoot >= 0.5 ? 0.36 : 0.08;
+                double rootMinW = !double.IsNaN(lk.rootWidth) ? lk.rootWidth : (lk.scalpRoot >= 0.5 ? 0.36 : 0.08);
                 double effW = isBase ? 1.0 : widthScale;
                 double effT = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effW);
                 double baseHalfW = lk.baseWidth * 0.5 * effW;
@@ -191,6 +194,24 @@ namespace AetherStrand
                 double odInv = 1.0 / (odl == 0 ? 1.0 : odl);
                 odx *= odInv; ody *= odInv; odz *= odInv;
                 double ox = 0, oy = 1, oz = 0;
+                // the lock's overall direction (root to tip): with surfaceShine the shading tangent leans to it, so a lock that
+                // bends keeps one highlight along its length instead of going dark where it bends away from the light (as the web)
+                double chx = 0, chy = 0, chz = 0;
+                if (lk.surfaceShine > 0 && lk.shadeDir != null)
+                {
+                    // (a shadeDir from the builder: the comb direction there, shared by neighbouring locks)
+                    double[] sd = lk.shadeDir;
+                    chx = m00 * sd[0] + m01 * sd[1] + m02 * sd[2]; chy = m10 * sd[0] + m11 * sd[1] + m12 * sd[2]; chz = m20 * sd[0] + m21 * sd[1] + m22 * sd[2];
+                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
+                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+                }
+                else if (lk.surfaceShine > 0)
+                {
+                    int tl0 = b + AetherStrandWebSolver.N - 1;
+                    chx = X[tl0] - X[b]; chy = Y[tl0] - Y[b]; chz = Z[tl0] - Z[b];
+                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
+                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
+                }
                 int sm = lockSm[s], rings = ringCount[s];
                 double round = lk.roundness;
                 if (sm > 1)
@@ -235,6 +256,16 @@ namespace AetherStrand
                     double hl = System.Math.Sqrt(hnx * hnx + hny * hny + hnz * hnz);
                     double hnInv = 1.0 / (hl == 0 ? 1.0 : hl);
                     hnx *= hnInv; hny *= hnInv; hnz *= hnInv;
+                    // shading tangent (surfaceShine): the lock's direction along the scalp, its rise off the skin removed
+                    double stx = tx, sty = ty, stz = tz;
+                    if (lk.surfaceShine > 0)
+                    {
+                        if (chx != 0 || chy != 0 || chz != 0) { stx += (chx - stx) * lk.surfaceShine; sty += (chy - sty) * lk.surfaceShine; stz += (chz - stz) * lk.surfaceShine; }
+                        double tn = (stx * hnx + sty * hny + stz * hnz) * lk.surfaceShine;
+                        stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
+                        double sl = System.Math.Sqrt(stx * stx + sty * sty + stz * stz);
+                        if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
+                    }
 
                     double sx, sy, sz;
                     if (!lockNormal)
@@ -277,7 +308,7 @@ namespace AetherStrand
                         verts[vIdx] = MapPoint(vx, vy, vz);
                         double nx = sx * PNX[r] + ox * PNY[r], ny = sy * PNX[r] + oy * PNY[r], nz = sz * PNX[r] + oz * PNY[r];
                         norms[vIdx] = MapDir(nx, ny, nz, 0);
-                        { Vector3 tv = MapDir(tx, ty, tz, 1); tans[vIdx] = new Vector4(tv.x, tv.y, tv.z, 1f); }
+                        { Vector3 tv = MapDir(stx, sty, stz, 1); tans[vIdx] = new Vector4(tv.x, tv.y, tv.z, 1f); }
                         vIdx++;
                     }
                 }
@@ -287,6 +318,17 @@ namespace AetherStrand
                 double tl2 = System.Math.Sqrt(ttx * ttx + tty * tty + ttz * ttz);
                 double ttInv = 1.0 / (tl2 == 0 ? 1.0 : tl2);
                 ttx *= ttInv; tty *= ttInv; ttz *= ttInv;
+                if (lk.surfaceShine > 0)
+                {
+                    double thx = X[ti] - hcx, thy = Y[ti] - hcy, thz = Z[ti] - hcz;
+                    double thl = System.Math.Sqrt(thx * thx + thy * thy + thz * thz);
+                    if (thl > 0) { thx /= thl; thy /= thl; thz /= thl; }
+                    if (chx != 0 || chy != 0 || chz != 0) { ttx += (chx - ttx) * lk.surfaceShine; tty += (chy - tty) * lk.surfaceShine; ttz += (chz - ttz) * lk.surfaceShine; }
+                    double tn = (ttx * thx + tty * thy + ttz * thz) * lk.surfaceShine;
+                    double fx = ttx - thx * tn, fy = tty - thy * tn, fz = ttz - thz * tn;
+                    double fl = System.Math.Sqrt(fx * fx + fy * fy + fz * fz);
+                    if (fl > 1e-4) { ttx = fx / fl; tty = fy / fl; ttz = fz / fl; }
+                }
                 verts[vIdx] = MapPoint(X[ti], Y[ti], Z[ti]);
                 norms[vIdx] = MapDir(ox, oy, oz, 0);
                 { Vector3 tv2 = MapDir(ttx, tty, ttz, 1); tans[vIdx] = new Vector4(tv2.x, tv2.y, tv2.z, 1f); }

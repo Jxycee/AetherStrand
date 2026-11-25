@@ -1,14 +1,69 @@
 import * as THREE from 'three';
+import { bakeHairCards, cardBakeKey, resolveCardBake, type CardBakeSettings } from './cardBake';
+
+/**
+ * The strand maps every hair card samples, as raw RGBA8 pixels (row 0 = root, last row = tip; U tiles).
+ * Built either procedurally (computeProceduralHairTextureData) or by rendering real strands (cardBake.ts).
+ * Pure data, so the CPU preview, the Unity export and the browser all use the same pixels.
+ */
+export interface HairTextureData {
+  width: number;
+  height: number;
+  grooveAo: Uint8ClampedArray; // R = strand AO (grooves, strands shadowing strands)
+  flowId: Uint8ClampedArray; // R = per-strand tone/ID, G = depth (procedural: root-to-tip gradient), B = highlight shift
+  normal: Uint8ClampedArray; // tangent-space normal (x across the card, y along it)
+  alphaCard: Uint8ClampedArray; // R = coverage
+  flow: Uint8ClampedArray; // RG = strand direction in card space (x across, y along; 0.5 = straight down the card)
+}
+
+/**
+ * The strand maps a recipe's shader asks for: baked from strands (default, shader.cardBake settings) or the old
+ * procedural maps (shader.cardTextures = 'procedural'). key changes only when the maps would change, so callers can
+ * cache. Bakes are memoised per key.
+ */
+export function strandMapsKey(shader: { cardTextures?: string; cardBake?: Partial<CardBakeSettings> } | undefined): string {
+  return shader?.cardTextures === 'procedural' ? 'procedural' : 'baked:' + cardBakeKey(resolveCardBake(shader?.cardBake));
+}
+const strandMapCache = new Map<string, HairTextureData>();
+export function strandMapsFor(shader: { cardTextures?: string; cardBake?: Partial<CardBakeSettings> } | undefined): HairTextureData {
+  const key = strandMapsKey(shader);
+  let d = strandMapCache.get(key);
+  if (!d) {
+    d = key === 'procedural' ? computeProceduralHairTextureData() : bakeHairCards(shader?.cardBake);
+    if (strandMapCache.size > 6) strandMapCache.clear();
+    strandMapCache.set(key, d);
+  }
+  return d;
+}
+
+/** Flips an RGBA8 image top to bottom in place. */
+export function flipRows(px: Uint8ClampedArray, width: number, height: number): void {
+  const rowLen = width * 4, tmp = new Uint8ClampedArray(rowLen);
+  for (let y = 0; y < height >> 1; y++) {
+    const a = y * rowLen, b = (height - 1 - y) * rowLen;
+    tmp.set(px.subarray(a, a + rowLen)); px.copyWithin(a, b, b + rowLen); px.set(tmp, b);
+  }
+}
+
+/** A flow map with every strand running straight down the card (what the procedural pack implies). */
+export function flatFlowMap(width: number, height: number): Uint8ClampedArray {
+  const d = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) { d[i * 4] = 128; d[i * 4 + 1] = 255; d[i * 4 + 2] = 128; d[i * 4 + 3] = 255; }
+  return d;
+}
 
 export interface HairTexturePack {
   grooveAoCanvas: HTMLCanvasElement;
   flowIdCanvas: HTMLCanvasElement;
   normalCanvas: HTMLCanvasElement;
   alphaCardCanvas: HTMLCanvasElement;
+  flowCanvas: HTMLCanvasElement;
   grooveAoTexture: THREE.CanvasTexture;
   flowIdTexture: THREE.CanvasTexture;
   normalTexture: THREE.CanvasTexture;
   alphaCardTexture: THREE.CanvasTexture;
+  flowTexture: THREE.CanvasTexture;
+  data: HairTextureData;
   dispose: () => void;
 }
 
@@ -27,29 +82,9 @@ function seededRandom(seed: number): () => number {
  * - Tangent-Space Normal Map: refined silky directional normals (zero harsh plastic ridges)
  * - Alpha Card / Wispy Tip Map: 100% solid core through v = 0.70, fraying cleanly ONLY at the tips into fine wisps
  */
-export function createHairTexturePack(maxAnisotropy = 4): HairTexturePack {
+export function computeProceduralHairTextureData(): HairTextureData {
   const width = 512;
   const height = 1024;
-
-  const grooveAoCanvas = document.createElement('canvas');
-  grooveAoCanvas.width = width;
-  grooveAoCanvas.height = height;
-  const gCtx = grooveAoCanvas.getContext('2d')!;
-
-  const flowIdCanvas = document.createElement('canvas');
-  flowIdCanvas.width = width;
-  flowIdCanvas.height = height;
-  const fCtx = flowIdCanvas.getContext('2d')!;
-
-  const normalCanvas = document.createElement('canvas');
-  normalCanvas.width = width;
-  normalCanvas.height = height;
-  const nCtx = normalCanvas.getContext('2d')!;
-
-  const alphaCardCanvas = document.createElement('canvas');
-  alphaCardCanvas.width = width;
-  alphaCardCanvas.height = height;
-  const aCtx = alphaCardCanvas.getContext('2d')!;
 
   const rand = seededRandom(519204);
 
@@ -89,10 +124,10 @@ export function createHairTexturePack(maxAnisotropy = 4): HairTexturePack {
   }
 
   const heightField = new Float32Array(width * height);
-  const gImg = gCtx.createImageData(width, height);
-  const fImg = fCtx.createImageData(width, height);
-  const nImg = nCtx.createImageData(width, height);
-  const aImg = aCtx.createImageData(width, height);
+  const gImg = { data: new Uint8ClampedArray(width * height * 4) };
+  const fImg = { data: new Uint8ClampedArray(width * height * 4) };
+  const nImg = { data: new Uint8ClampedArray(width * height * 4) };
+  const aImg = { data: new Uint8ClampedArray(width * height * 4) };
 
   for (let y = 0; y < height; y++) {
     const v = y / (height - 1); // 0 = root, 1 = tip
@@ -209,10 +244,33 @@ export function createHairTexturePack(maxAnisotropy = 4): HairTexturePack {
     }
   }
 
-  gCtx.putImageData(gImg, 0, 0);
-  fCtx.putImageData(fImg, 0, 0);
-  nCtx.putImageData(nImg, 0, 0);
-  aCtx.putImageData(aImg, 0, 0);
+  // The loops above write the root at row 0, but three.js (flipY) and Unity both sample v = 0 from the BOTTOM row, so the
+  // maps were read upside down: tip wisps sat at the root (where the shader ignores alpha) and the tips got the solid root
+  // rows. Flip to the GL convention every strand map now uses (cardBake.ts writes it directly).
+  for (const px of [gImg.data, fImg.data, nImg.data, aImg.data]) flipRows(px, width, height);
+  // the normal map's y (along the card) was computed root->tip in row order; after the flip it must point the other way
+  for (let i = 0; i < width * height; i++) nImg.data[i * 4 + 1] = 255 - nImg.data[i * 4 + 1];
+  return { width, height, grooveAo: gImg.data, flowId: fImg.data, normal: nImg.data, alphaCard: aImg.data, flow: flatFlowMap(width, height) };
+}
+
+/** Browser wrapper: puts the strand maps on canvases and three.js textures (U repeats, V clamps). */
+export function createHairTexturePack(maxAnisotropy = 4, data: HairTextureData = computeProceduralHairTextureData()): HairTexturePack {
+  const { width, height } = data;
+  const toCanvas = (px: Uint8ClampedArray) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    const img = ctx.createImageData(width, height);
+    img.data.set(px);
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  };
+  const grooveAoCanvas = toCanvas(data.grooveAo);
+  const flowIdCanvas = toCanvas(data.flowId);
+  const normalCanvas = toCanvas(data.normal);
+  const alphaCardCanvas = toCanvas(data.alphaCard);
+  const flowCanvas = toCanvas(data.flow);
 
   const makeTex = (canvas: HTMLCanvasElement, repeatX: boolean) => {
     const tex = new THREE.CanvasTexture(canvas);
@@ -228,21 +286,26 @@ export function createHairTexturePack(maxAnisotropy = 4): HairTexturePack {
   const flowIdTexture = makeTex(flowIdCanvas, true);
   const normalTexture = makeTex(normalCanvas, true);
   const alphaCardTexture = makeTex(alphaCardCanvas, true);
+  const flowTexture = makeTex(flowCanvas, true);
 
   return {
     grooveAoCanvas,
     flowIdCanvas,
     normalCanvas,
     alphaCardCanvas,
+    flowCanvas,
     grooveAoTexture,
     flowIdTexture,
     normalTexture,
     alphaCardTexture,
+    flowTexture,
+    data,
     dispose: () => {
       grooveAoTexture.dispose();
       flowIdTexture.dispose();
       normalTexture.dispose();
       alphaCardTexture.dispose();
+      flowTexture.dispose();
     },
   };
 }

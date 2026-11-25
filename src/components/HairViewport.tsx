@@ -3,6 +3,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BustRig, createStylizedBust } from '../engine/bustModel';
+import { conformPoint, type CharacterHead } from '../engine/characterHead';
+import { hairShellPolylines } from '../engine/hairShell';
+import { naturalMaxHairlinePhi } from '../engine/hairBuilder';
 import { HairPhysicsSystem, HairSimulationStats } from '../engine/hairPhysics';
 import {
   createHairShaderMaterial,
@@ -10,12 +13,13 @@ import {
   resolveBackdropHex,
   syncHairShaderUniforms,
 } from '../engine/hairShaders';
-import { createHairTexturePack, HairTexturePack } from '../engine/hairTextures';
+import { createHairTexturePack, HairTexturePack, strandMapsFor, strandMapsKey } from '../engine/hairTextures';
 import {
   BackdropMode,
   CameraPresetId,
   ExportedHairLock,
   HairBuilderConfig,
+  HairShellGrid,
   HairPresetId,
   HairQualityAudit,
   LightingPresetId,
@@ -58,6 +62,10 @@ interface HairViewportProps {
   onStatsChange?: (stats: HairSimulationStats) => void;
   onAuditChange?: (audit: HairQualityAudit) => void;
   onTexturesReady?: (pack: HairTexturePack) => void;
+  /** Optional character head (OBJ, fitted like the Unity plugin) shown instead of the mannequin. */
+  characterHead?: CharacterHead | null;
+  /** Optional outer-shape shell (hairShell.ts) drawn as a green grid over the hair while it is being edited. */
+  shellOverlay?: HairShellGrid | null;
 }
 
 const CAMERA_PRESETS: Record<CameraPresetId, { pos: [number, number, number]; target: [number, number, number] }> = {
@@ -301,6 +309,8 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     onStatsChange,
     onAuditChange,
     onTexturesReady,
+    characterHead = null,
+    shellOverlay = null,
   },
   ref
 ) {
@@ -326,6 +336,9 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   const hairSystemRef = useRef<HairPhysicsSystem | null>(null);
   const hairMatRef = useRef<THREE.ShaderMaterial | null>(null);
   const texturePackRef = useRef<HairTexturePack | null>(null);
+  // which strand maps the pack holds (baked settings or procedural), so a recipe change rebakes only when needed
+  const strandKeyRef = useRef<string>('');
+  const maxAnisoRef = useRef<number>(4);
   const bustRigRef = useRef<BustRig | null>(null);
   const simClockRef = useRef(0);
   const renderRigRef = useRef<{
@@ -448,6 +461,44 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
 
   const builderKey = builderConfig ? JSON.stringify(builderConfig) : '';
 
+  // the hair is fitted to the loaded character's skull (head conform), as the Unity plugin and the preview renderer do
+  const characterHeadRef = useRef<CharacterHead | null>(characterHead);
+  characterHeadRef.current = characterHead;
+
+  // shell overlay: bright green lines where they are in front of the hair, a faint copy through it
+  const shellKey = shellOverlay ? JSON.stringify(shellOverlay) : '';
+  useEffect(() => {
+    const bust = bustRigRef.current;
+    if (!bust || !shellOverlay) return;
+    const conform = characterHead?.conform ?? null;
+    const lines = hairShellPolylines(shellOverlay, (p) => { if (conform) conformPoint(conform, p, naturalMaxHairlinePhi, true); });
+    const seg: number[] = [];
+    for (const l of lines) for (let k = 0; k + 1 < l.length; k++) seg.push(l[k].x, l[k].y, l[k].z, l[k + 1].x, l[k + 1].y, l[k + 1].z);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+    const front = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x3cff5a, transparent: true, opacity: 0.95 }));
+    const through = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x3cff5a, transparent: true, opacity: 0.22, depthTest: false }));
+    front.renderOrder = 10; through.renderOrder = 11;
+    bust.headPivot.add(front, through);
+    return () => {
+      bust.headPivot.remove(front, through);
+      geo.dispose();
+      (front.material as THREE.Material).dispose();
+      (through.material as THREE.Material).dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shellKey, characterHead]);
+
+  useEffect(() => {
+    bustRigRef.current?.setCharacterHead(characterHead);
+    const sys = hairSystemRef.current;
+    const bust = bustRigRef.current;
+    if (sys && bust) {
+      sys.conformToHead(characterHead?.conform ?? null);
+      sys.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    }
+  }, [characterHead]);
+
   useEffect(() => {
     const sys = hairSystemRef.current;
     const bust = bustRigRef.current;
@@ -455,7 +506,9 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     const stats = builderConfig
       ? sys.loadCustomBuilder(builderConfig, presetId)
       : sys.loadPreset(presetId);
+    sys.conformToHead(characterHeadRef.current?.conform ?? null);
     sys.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    bust.setScalpPaint(sys.scalpPaint);
     onStatsChange?.(stats);
     onAuditChange?.(sys.auditQuality(bust.headPivot, motionRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -464,8 +517,24 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
   useEffect(() => {
     if (hairMatRef.current) {
       syncHairShaderUniforms(hairMatRef.current, shaderConfig, lightingPreset, visionMode);
+      // card strand maps: rebake when the recipe's cardTextures / cardBake settings change
+      const key = strandMapsKey(shaderConfig);
+      if (key !== strandKeyRef.current && texturePackRef.current) {
+        const old = texturePackRef.current;
+        const pack = createHairTexturePack(maxAnisoRef.current, strandMapsFor(shaderConfig));
+        const u = hairMatRef.current.uniforms;
+        u.uGrooveAoMap.value = pack.grooveAoTexture;
+        u.uFlowIdMap.value = pack.flowIdTexture;
+        u.uNormalMap.value = pack.normalTexture;
+        u.uAlphaMap.value = pack.alphaCardTexture;
+        u.uStrandFlowMap.value = pack.flowTexture;
+        texturePackRef.current = pack;
+        strandKeyRef.current = key;
+        onTexturesReady?.(pack);
+        old.dispose();
+      }
     }
-    bustRigRef.current?.setRootTint(shaderConfig.rootColor);
+    bustRigRef.current?.setRootTint(shaderConfig.rootColor, shaderConfig.baseColor, shaderConfig.tipColor, shaderConfig.primarySpecColor, shaderConfig.primaryIntensity);
 
     const objs = sceneObjectsRef.current;
     if (objs) {
@@ -593,13 +662,16 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     renderRigRef.current = { renderer, scene, camera, controls, isSoftwareGl };
 
     const bust = createStylizedBust();
-    bust.setRootTint(shaderRef.current.rootColor);
+    bust.setRootTint(shaderRef.current.rootColor, shaderRef.current.baseColor, shaderRef.current.tipColor, shaderRef.current.primarySpecColor, shaderRef.current.primaryIntensity);
+    if (characterHead) bust.setCharacterHead(characterHead);
     scene.add(bust.rootGroup);
     bustRigRef.current = bust;
 
     const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-    const texturePack = createHairTexturePack(maxAniso);
+    const texturePack = createHairTexturePack(maxAniso, strandMapsFor(shaderRef.current));
     texturePackRef.current = texturePack;
+    strandKeyRef.current = strandMapsKey(shaderRef.current);
+    maxAnisoRef.current = maxAniso;
     onTexturesReady?.(texturePack);
 
     const hairMaterial = createHairShaderMaterial(
@@ -614,7 +686,9 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     if (builderConfig) {
       hairSystem.loadCustomBuilder(builderConfig, presetId);
     }
+    if (characterHeadRef.current) hairSystem.conformToHead(characterHeadRef.current.conform);
     hairSystem.snapToHead(bust.headPivot, physicsRef.current.strandWidthScale);
+    bust.setScalpPaint(hairSystem.scalpPaint);
     scene.add(hairSystem.hairMesh);
     scene.add(hairSystem.colliderDebugGroup);
     scene.add(hairSystem.boneDebugLines);
