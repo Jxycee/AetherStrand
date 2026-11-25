@@ -525,6 +525,9 @@ export interface CropFieldOptions {
   quiff?: number;
   /** 0..1: how much flatter the hair lies down the sides and back than on the top (no bowl read). Default 0.5. */
   sideTaper?: number;
+  /** phi (rad from the crown) where that flattening starts, default 0.85. Lower (0.6) keeps the sides of the top close to
+   *  the head, so seen from the front the top doesn't bulge out past the temples as a dark helmet edge. */
+  sideTaperFrom?: number;
   /**
    * Width (rad) of the band above the side and back edge where the crop melts into the painted fade: the hair surface
    * sinks to the scalp, locks thin out and narrow, so the lock layer ends without a ledge and the paint carries the fade on.
@@ -706,7 +709,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   const sideEdge = (u: THREE.Vector3) => (fadeW > 0 ? (1 - frontAzK(azOf(u))) * (1 - _ss(insideHair(u) / fadeW)) : 0);
   const hairSurface = (u: THREE.Vector3) => {
     const room = _ss((insideHair(u) + 0.05) / 0.45);
-    const side = 1 - sideTaper * _ss((phiOf(u) - 0.85) / 0.45);
+    const side = 1 - sideTaper * _ss((phiOf(u) - (o.sideTaperFrom ?? 0.85)) / 0.45);
     // low-frequency rises and dips (by position on the head, so neighbouring locks rise together)
     const nz = (o.surfaceNoise ?? 0) * (Math.sin(9 * u.x + 1.3) * Math.sin(8 * u.y + 0.4) + 0.6 * Math.sin(11 * u.z + 2.1 + 5 * u.x)) * room * side;
     // the centre front stands higher than the temples (fades out across the top)
@@ -2647,7 +2650,7 @@ export function buildCustomHairSpecs(config: HairBuilderConfig): LockBuildSpec[]
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.085, clump: 0.9, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.4, surfaceNoise: 0.006, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, spikeHeight: 0.06, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
       length: 0.1 + 0.03 * config.crownVolume, volume: 0.02 + 0.016 * config.crownVolume,

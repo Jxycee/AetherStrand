@@ -164,6 +164,8 @@ shows as dark teeth along the hairline.
   - `centreArch` (m, default 0): the middle third of the front stands higher than the temples, so the front has an arched
     silhouette instead of a flat block (undercut: 0.02).
   - `sideUnderLight` (0..1, default 0): on the sides the under layer is shaded like the outer one, with a lighter root.
+  - `sideTaperFrom` (phi, default 0.85): where `sideTaper` starts flattening the hair. 0.6 keeps the sides of the top
+    close to the head, so the front view has no helmet bulge past the temples (undercut: 0.6).
   - `sideLength` (default 1): length multiplier for locks on the side of the top (|azimuth| 0.95 to 2.0). Longer (1.4)
     leaves fewer rows of tips above the ear; shorter (0.6) made more rows of dark tips (undercut: 1.4).
   - Tuft locks are 1.5 times wider (up to 0.9 of their length) and show the colour gradient out to the tip colour
