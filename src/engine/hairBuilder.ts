@@ -643,6 +643,24 @@ export interface CropFieldOptions {
    * many there are.
    */
   hairlineWisps?: number;
+  /**
+   * 0..1: game chunks. The clump cards become the main hair: thick, rounded pointed chunks that cover the top, with the
+   * narrow locks shortened under them as fill (they show only as darker hair in the gaps). 0 = cards are thin overlays.
+   */
+  chunks?: number;
+  /** game chunks: length multiplier for the chunks (1 = about the field locks' length) */
+  chunkLength?: number;
+  /** game chunks: root width (0..1 of full width); wide roots blend each chunk into the mass instead of a point at both ends */
+  chunkRoot?: number;
+  /** game chunks: how deep (m) each chunk's root end starts under the scalp */
+  chunkBury?: number;
+  /** game chunks: away from the front hairline, chunks root at least this far (rad) inside the hair edge */
+  chunkEdgeIn?: number;
+  /** game chunks: the front row of chunks spans this azimuth (rad) either side of the centre */
+  chunkFrontWidth?: number;
+  /** game chunks: the under layer thins out through the tapered back too, so the back chunks end in their own points
+   *  instead of over a ragged fringe of narrow locks */
+  chunkBackThin?: number;
   /** Part of the colour gradient each lock shows (LockBuildSpec.colorRange). Default [0.12, 0.62] outer, [0.05, 0.4] under. */
   colorRange?: [number, number];
   /**
@@ -820,7 +838,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   };
   // clump guides: neighbouring locks pull their tips onto the nearest guide, so the field forms larger swept clumps with
   // pointed ends (and highlights that run along them) while the roots stay evenly spread
-  type Guide = { u: THREE.Vector3; path: THREE.Vector3[]; vol: number; spike: number; tuft: boolean; lift: number; twist: number };
+  type Guide = { u: THREE.Vector3; path: THREE.Vector3[]; vol: number; spike: number; tuft: boolean; lift: number; twist: number; front?: boolean };
   const guides: Guide[] = [];
   const pieceDepth = o.pieceDepth ?? 0, pieceGroove = o.pieceGroove ?? 0, pieceGather = o.pieceGather ?? 0;
   // clump radius on the unit scalp (a root this far from its guide is on the clump's border)
@@ -838,6 +856,21 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
     const tuft = topK > 0.3 && rnd() < (o.tufts ?? 0);
     guides.push({ u, path, vol: (0.9 + 0.2 * rnd()) * (o.pieceLift ? 1 + o.pieceLift * rnd() * topK : 1), spike: spike * (0.4 + 1.2 * rnd()) * topK, tuft, lift: tuft ? 0.8 + 0.6 * rnd() : 1, twist });
   });
+  // game chunks: a row of guides along the front hairline, so the front's chunks grow from the hairline itself instead of
+  // leaving a strip of paint in front of the first row of field guides
+  if ((o.chunks ?? 0) > 0) {
+    const step = (o.clumpSpacing ?? 0.055) / 0.3 * 0.75;
+    const fw = o.chunkFrontWidth ?? 1.0;
+    for (let az = -fw; az <= fw; az += step / Math.max(0.3, Math.sin(o.hairPhi(0)))) {
+      const a = az + (rnd() - 0.5) * step * 0.3;
+      const u = uAt(a, o.hairPhi(a) + 0.03);
+      const fk = frontK(u);
+      const twist = o.pieceTwist ? o.pieceTwist * (rnd() * 2 - 1) * (1 - fk) : 0;
+      const path = march(u, L0, fk, twist);
+      if (path.length < 3) continue;
+      guides.push({ u, path, vol: 0.95 + 0.1 * rnd(), spike: spike * (0.4 + 0.8 * rnd()), tuft: false, lift: 1, twist, front: true });
+    }
+  }
   const nearestGuide = (u: THREE.Vector3) => {
     let best: Guide | null = null, bd = -2;
     for (const g of guides) { const d = g.u.dot(u); if (d > bd) { bd = d; best = g; } }
@@ -856,6 +889,9 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       // (and through a tapered back, fewer locks toward the edge: the painted short hair shows through more and more, so
       // the top fades into it instead of ending along a line)
       if (rnd() < 0.55 * se * se + (o.backThin ?? 0) * Math.pow(taperAt(u), 2)) return; // (squared: fewer gaps where the band is shallow, so the temples never show lone locks on the paint)
+      // (game chunks: the cards are the outer hair, so the narrow outer locks go; the under layer thins out toward the
+      // fade, so the sides show the smooth painted short hair below the chunks instead of a stack of dark leaves)
+      if ((o.chunks ?? 0) > 0 && rnd() < (o.chunks ?? 0) * (outer ? 1 : Math.min(1, 2 * se + (o.chunkBackThin ?? 0) * taperAt(u)))) return;
       const g = nearestGuide(u);
       // the outer layer lies on the hair surface, the under layer below it; a hair's breadth of order between locks
       const layerMul = (outer ? 1 : 0.85) * (g ? g.vol : 1), order = outer ? 0.0015 * rnd() : 0;
@@ -865,7 +901,7 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       const tuftLock = outer && !!g && g.tuft;
       // (a tapered back is short hair: no smooth-back lengthening there, and shorter locks toward the edge)
       const bt = taperAt(u);
-      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) * (1 - 0.6 * bt) * (tuftLock ? 0.5 + 0.15 * rnd() : 1)
+      const len = L0 * (0.75 + 0.5 * rnd()) * (outer ? 1 : 0.75) * (1 - 0.3 * fk) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) * (1 - 0.6 * bt) * (tuftLock ? 0.5 + 0.15 * rnd() : 1) * (1 - 0.35 * (o.chunks ?? 0))
         * (1 + ((o.sideLength ?? 1) - 1) * _ss((Math.abs(az0) - 0.95) / 0.35) * (1 - _ss((Math.abs(az0) - 2.0) / 0.4)));
       // (a piece's locks follow its turned direction; the under layer keeps the plain flow)
       const path = march(u, len, fk, outer && g && pieceGather > 0 ? g.twist : 0);
@@ -951,21 +987,33 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
   // clump cards: one wide pointed card on top of each clump guide, so the top reads as a few chunky swept clumps (game
   // hair) with the narrow locks underneath as their texture and coverage
   const cardW = o.clumpCards ?? 0;
+  const chunkK = o.chunks ?? 0;
   if (cardW > 0) {
     for (const g of guides) {
       const se = sideEdge(g.u);
       if (se > 0.6) continue; // the fade band stays fine-textured
-      if (Math.abs(azOf(g.u)) > 2.0 && phiOf(g.u) > 0.6) continue; // and so does the back below the crown
+      if (chunkK === 0 && Math.abs(azOf(g.u)) > 2.0 && phiOf(g.u) > 0.6) continue; // and so does the back below the crown (game chunks keep it)
       if (g.u.angleTo(W) < 1.6 * (o.whorlRadius ?? 0.3) && (o.combDown ?? 0) < 1) continue; // and the crown whorl (cards there radiate as a starburst)
       const fk = frontK(g.u);
-      const path = g.path;
-      const realLen = (path.length - 1) * (L0 * (1 - 0.3 * fk) / 8);
+      // (game chunks: no chunks on the sides, where they stack as dark leaves above the fade; the back's chunks run as
+      // long as the smooth back hair below them, so they read as long combed-down pieces rather than scales)
+      if (chunkK > 0 && se > 0.05) continue;
+      // (nor close to the side/back edge, where a chunk's flat end shows edge-on above the ear as a dark block)
+      if (chunkK > 0 && !g.front && (1 - frontAzK(azOf(g.u))) * (o.chunkEdgeIn ?? 0) > insideHair(g.u)) continue;
+      const backK = _ss((Math.abs(azOf(g.u)) - smoothFrom) / 0.8) * (o.backSmooth ?? 1);
+      const cLen = L0 * (1 - 0.3 * fk) * (chunkK > 0 ? (1 + 0.25 * chunkK) * (o.chunkLength ?? 1) * (1 + 0.7 * backK * (1 - (o.backTaper ?? 0))) : 1);
+      const path = chunkK > 0 ? march(g.u, cLen, fk, g.twist) : g.path;
+      if (path.length < 3) continue;
+      const realLen = (path.length - 1) * (cLen / 8);
+      const cw = Math.min((o.clumpSpacing ?? 0.055) * cardW, realLen * (0.45 - 0.15 * chunkK)) * (0.85 + 0.3 * rnd()) * wMul * (1 - 0.4 * se);
       const pts: THREE.Vector3[] = [];
       for (let n = 0; n < NODES_PER_LOCK; n++) {
         const t = n / (NODES_PER_LOCK - 1);
         const cu = pathAt(path, t);
         const rise = _ss(t / 0.25);
-        const h = 0.0025 + (hairSurface(cu) * g.vol + 0.003) * rise + g.spike * (o.spikeHeight ?? 0.02) * Math.pow(t, 2);
+        // (game chunks: the root end starts under the scalp, so the chunk grows out of the painted short hair instead of
+        // showing its cut end, which along the diagonal front read as a sawtooth and above the ear as dark blocks)
+        const h = (chunkK > 0 ? THREE.MathUtils.lerp(-(o.chunkBury ?? 0), 0.0025, _ss(t / 0.2)) : 0.0025) + (hairSurface(cu) * g.vol + 0.003) * rise + g.spike * (o.spikeHeight ?? 0.02) * Math.pow(t, 2);
         const qh = quiffAt(cu) * g.vol * rise;
         const base = surf(cu, 0);
         const nrm = surf(cu, 1).sub(base).normalize();
@@ -973,12 +1021,13 @@ export function cropFieldLocks(specs: LockBuildSpec[], o: CropFieldOptions): voi
       }
       specs.push({
         pointsLocal: pts,
-        width: Math.min((o.clumpSpacing ?? 0.055) * cardW, realLen * 0.45) * (0.85 + 0.3 * rnd()) * wMul * (1 - 0.4 * se),
-        thickness: 0.0025, stiffnessBias: 0.97, layerAO: 0.9 + 0.1 * rnd(), layerOrder: 4, smooth: 2,
+        width: cw,
+        thickness: chunkK > 0 ? Math.max(0.0025, cw * 0.32 * chunkK) : 0.0025, roundness: chunkK > 0 ? 0.6 * chunkK : undefined,
+        stiffnessBias: 0.97, layerAO: 0.9 + 0.1 * rnd(), layerOrder: 4, smooth: 2,
         // pointed: the taper starts early so each clump narrows to one tip
         // (a card lies on the locks, not on the skin: a light root like the outer locks'. With the usual dark root every
         // card's first fifth read as a dark leaf on the side of the top)
-        tipStart: 0.45, lockNormal: false, scalpRoot: 0.2, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
+        tipStart: 0.45 - 0.15 * chunkK, lockNormal: false, scalpRoot: 0.2, rootWidth: chunkK > 0 ? (o.chunkRoot ?? (g.front ? 0.8 : 0.36)) : undefined, rigid: o.rigid ?? true, surfaceShine: o.surfaceShine ?? 0.85,
         shadeDir: surf(path[path.length - 1], 0).sub(surf(path[0], 0)),
         colorRange: o.colorRange ?? [0.3, 0.75],
       });
@@ -1147,8 +1196,8 @@ export const SCALP_PAINT_BY_ARCHETYPE: Partial<Record<HairBuilderArchetype, (ctx
 /** Cut line of undercut-fade: sideLength sets the sideburn (upper third of the ear by default), backLength how low the nape goes. */
 export function undercutFadeCut(config: HairBuilderConfig): EarCutOptions {
   return {
-    hairlinePhi: roundedHairline(0.98, 0.03, 0.75), templeRecede: 0.03, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.45, sideburnCurve: 0.6, sideburnGap: 0.03,
-    earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.4, config.backLength), napeCurve: 0.8,
+    hairlinePhi: roundedHairline(1.06, 0.03, 0.75), templeRecede: 0.0, sideburnLength: THREE.MathUtils.lerp(0.3, 0.65, config.sideLength), sideburnTaper: 0.55, sideburnCurve: 0.6, sideburnGap: 0.03,
+    earClearance: 0.03, napePhi: THREE.MathUtils.lerp(2.2, 2.55, config.backLength), napeCurve: 0.45,
   };
 }
 /**
@@ -1174,10 +1223,10 @@ export function undercutHairlineWobble(config: HairBuilderConfig): (az: number) 
   return hairlineWobble(0.015, (config.seed || 1337) * 0.001);
 }
 /** undercut-fade paint before extendFrontPaint: the cut the hair is built to. */
-export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 1.2): ScalpPaint {
+export function undercutFadeBasePaint(config: HairBuilderConfig, backBlend = 0.3): ScalpPaint {
   // thin tapered sideburn (mostly faded), wide soft blend from the top length into the short sides
   // (shaded under the hair, so the side locks lie on darker short hair instead of ending as dark leaves on a lit band)
-  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.3, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend, grainStretch: 5 }), underShade: 0.5 };
+  return { ...fadeScalpPaint({ ...undercutFadeCut(config), fadeHeight: config.fadeHeight ?? 0.4, topPhi: 1.0, stubble: 0.55, feather: 0.08, grain: 0.2, sideburnSolid: 0.6, frontBlend: 0, blend: config.fadeBlend ?? 0.75, backBlend, grainStretch: 5 }), underShade: 0.5 };
 }
 SCALP_PAINT_BY_ARCHETYPE['undercut-fade'] = ({ config }) => undercutFadePaint(config);
 
@@ -2791,7 +2840,7 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
     // (the top's locks end at the line a 0.6 fade would give whatever fadeHeight is: a lower fadeHeight fills the sides with
     // solid painted short hair up to meet the top, the head reads full from the front, and the top keeps no long overhang)
     // (and a nape no lower than backLength 0.6 would put it: a longer back lengthens the painted fade below the top, not the top)
-    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6), backLength: Math.min(config.backLength, 0.6) }, 0); // (extent: no back blend)
+    const undercutPaint = undercutFadeBasePaint({ ...config, fadeHeight: Math.max(config.fadeHeight ?? 0.4, 0.6), backLength: Math.min(config.backLength, 0.34) }, 0); // (extent: no back blend)
     // (an uneven front edge: hair meets the forehead along a soft wobble, not a ruled line)
     const wob = undercutHairlineWobble(config);
     cropFieldLocks(specs, {
@@ -2799,10 +2848,17 @@ export function buildArchetypeSpecs(config: HairBuilderConfig): LockBuildSpec[] 
       // the top's short side hair runs a little into the fade band so the sides never read bare above the ear
       // (over the forehead the paint's front blend is a soft gradient: the hair reaches the hairline itself, edgePhi)
       hairPhi: (az) => THREE.MathUtils.lerp(sampleArr(undercutPaint.fullPhi, az) - 0.1 * _ss((Math.abs(az) - 0.9) / 0.5), sampleArr(undercutPaint.edgePhi, az) + wob(az), _ss((1.05 - Math.abs(az)) / 0.45)),
-      clumpSpacing: 0.085, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0.8, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.35, pieceLift: 0.4, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, hairlineWisps: 1, spikeHeight: 0.045, clumpCards: 0.8, quiffBack: 1.4, quiff: 4, spacing: 0.034, clumpWidth: 0.8,
+      clumpSpacing: 0.09, clump: 1.0, sideTaper: 0.9, sideTaperFrom: 0.6, frontInset: 0.02, hairlineRow: 0.55, smoothFrom: 1.0, combTurn: 1.4, sideSpikeCut: 1, turnTaper: 0.15, tufts: 0, surfaceNoise: 0.012, pieceDepth: 0.014, pieceGroove: 0.65, pieceGather: 0.7, pieceTwist: 0.1, pieceLift: 0.1, centreArch: 0.02, sideUnderLight: 1, sideLength: 1.4, backTaper: 0.3, backTaperBand: 0.9, backThin: 0.8, taperShade: 0, spacing: 0.034, clumpWidth: 0.8,
+      // game look (the stylised reference): the top is chunky pointed pieces (chunks) rising from the hairline, swept up and
+      // to the side, spiky tips; the sides are the smooth painted undercut
+      // (long chunks, about hairline to crown; wide roots buried in the paint so no cut ends show; none on the side edge or
+      // across the temples, where they lay edge-on as dark blocks; the back's under layer gone so the back chunks end in
+      // their own points over the undercut; the front rises a little up and back)
+      chunks: 1, clumpCards: 1, chunkLength: 1.8, chunkRoot: 0.95, chunkBury: 0.012, chunkEdgeIn: 0.2, chunkFrontWidth: 0.65, chunkBackThin: 8,
+      spikeHeight: 0.03, quiff: 2.5, quiffBack: 0.3, hairlineWisps: 0,
       // combed back: no visible crown whorl; the back is combed straight down from where the top turns over the crown
       whorlRadius: 0, swirl: 0, combDown: 1,
-      length: 0.1 + 0.03 * config.crownVolume, volume: 0.75 * (0.02 + 0.016 * config.crownVolume),
+      length: 0.1 + 0.03 * config.crownVolume, volume: 1.2 * (0.02 + 0.016 * config.crownVolume),
       spike: 0.6 + 0.8 * config.spikeLift, stand: 0.55 + 0.3 * config.spikeLift,
     });
 

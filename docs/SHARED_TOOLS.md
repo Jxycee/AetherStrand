@@ -40,7 +40,8 @@ sideburn tips, the hairline and the scalp under thin hair, which modelled locks 
 - `fadeScalpPaint` `backBlend` (default 0): behind the ears the fade band grows by up to (1 + `backBlend`), full by the
   nape. The fade then starts where short back locks end, instead of leaving a strip of solid paint between the lock ends
   and the fade: under `underShade` that strip read as a dark horizontal shelf at the occiput. The hair extent must not use
-  it (undercut: `undercutFadeBasePaint(config, 0)` for the extent, 1.2 for the paint).
+  it (undercut: `undercutFadeBasePaint(config, 0)` for the extent, 0.3 for the paint: the game reference's undercut is solid
+short hair, fading only near the bottom).
 
 ### Hairline look (all styles)
 
@@ -107,7 +108,8 @@ values: each build sets them from `config.earLandmarks` (`setEarLandmarks`), or 
 
 Where the front hairline sits matters on a near-vertical forehead like Tobin's. At phi 1.3 the front locks had to climb
 the forehead wall and read as a hanging fringe from every view; at about phi 1.0 the hair starts where the forehead
-curves back and rises from there (undercut-fade uses `roundedHairline(0.98, 0.03, 0.75)`).
+curves back and rises from there (undercut-fade uses `roundedHairline(1.06, 0.03, 0.75)`: a lower, crisp front line
+as in the game reference).
 
 `roundedHairline(centre, cornerLift, width)` gives a curved front hairline for the cut line (`hairlinePhi`): highest at
 the temple corners, lowest in the middle of the forehead. Combine it with `templeRecede` for the temple dip of most men's
@@ -159,6 +161,22 @@ shows as dark teeth along the hairline.
   - `clumpCards` (share of `clumpSpacing`, default 0): one wide pointed card on each clump guide, over the narrow locks,
     so the top reads as a few chunky game-style clumps. Skipped in the fade band, on the back below the crown and at a
     visible whorl.
+  - `chunks` (0..1, default 0): game chunks. The clump cards become the main hair: thick, rounded, pointed chunks that
+    cover the top, with the narrow locks only as fill under them (the narrow outer layer goes; the under layer thins out
+    toward the fade). A row of chunk guides grows from the front hairline itself. None on the sides (se > 0.05), where
+    they stacked as dark leaves above the fade. Made for the stylised (game) reference, which shows a few big swept
+    pieces, not a field of strands. With these, undercut-fade uses:
+    - `chunkLength` (default 1): chunk length multiplier. Short chunks (1) read as scattered scales with paint between
+      them; 1.8 (about hairline to crown) reads as swept pieces. Undercut: 1.8.
+    - `chunkRoot` (0..1): root width. A narrow root makes every chunk a petal pointed at both ends, and along the front
+      the points read as teeth hanging on the forehead. Undercut: 0.95.
+    - `chunkBury` (m, default 0): the root end starts this far under the scalp, so a chunk grows out of the paint instead
+      of showing its cut end (a sawtooth along a diagonal front). Undercut: 0.012.
+    - `chunkEdgeIn` (rad, default 0): away from the front, chunks root at least this far inside the hair edge. Undercut: 0.2.
+    - `chunkFrontWidth` (rad, default 1.0): how far round from the centre the front row runs. At 1.0 the end chunks ran
+      back along the temple above the ear and lay edge-on as dark blocks in three-quarter view. Undercut: 0.65.
+    - `chunkBackThin` (default 0): the under layer also thins through the tapered back, so the back chunks end in their
+      own points over the undercut instead of over a ragged fringe of narrow locks. Undercut: 8.
   - `combDown` (0..1, default 0) with `whorlRadius: 0`: a combed-back crop has no visible whorl, so behind the ears the
     hair is combed straight down from where the top turns over the crown. Without it, flow away from the front meets
     again on the back of the head (a starburst), and a crown whorl in front of the back hair either crumples where the
@@ -438,3 +456,14 @@ Tracing a dark patch: render the same close-up with `--no-paint` (is it paint sh
 with the builder's under layer or clump cards switched off (whose lock is it?). If a lock is dark with no paint and no
 AO, it is missing the highlight, which is most of a dark lock's brightness: check its shading tangent (`surfaceShine`,
 `shadeDir`) and whether it is a root (`scalpRoot`) left uncovered.
+
+## Matching the game reference (Undercut Fade, Nov 26)
+
+The reference sheets show a photo column and a game (stylised) column. The target is the game column: Jaycee's rule is
+that the game version decides the build, not the life-like one. `tools/hair-blocks/refs/undercut-fade_game_views.json`
+crops the game column (the 3q and side panels are mirrored to face the same way as the render) and is the `--ref` for
+undercut renders. The photo-fitted volume shell (`builder.shell`) came out of `ref_undercut-fade.json`: fitted to the
+photo outline, it pushed the chunks into curls. Undercut cut values for the game look: `templeRecede` 0, `sideburnTaper`
+0.55, `napePhi` lerp(2.2, 2.55) by backLength with `napeCurve` 0.45 (the nape sits below the ear lobes), the top's own
+paint capped at backLength 0.34 so the longer nape lengthens the painted undercut, not the top. Recipe: charcoal colours,
+`fadeHeight` 0.25, `fadeBlend` 0.4.
