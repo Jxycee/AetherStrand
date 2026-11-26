@@ -87,6 +87,9 @@ export interface HairMassOptions {
   bindCount?: number;
   /** Seed for the per-vertex strand seed (texture variation only). */
   seed?: number;
+  /** Rings of vertices inside the outline over which the colour rolls to the root colour of the painted short hair
+   *  (default 3, about 9 degrees, 4 cm on the scalp: the width of the fade's soft band). 0 turns it off. */
+  edgeRollCells?: number;
   /** Optional head conform (characterHead.conformPoint, bound to the map), applied to each vertex after building. */
   conform?: (p: THREE.Vector3) => void;
 }
@@ -447,6 +450,19 @@ export function buildHairMass(locks: MassLockInput[], restNodesNow: THREE.Vector
   const scalpRoot = new Float32Array(V), gradT = new Float32Array(V);
   const hn = new THREE.Vector3(), tg = new THREE.Vector3(), t1 = new THREE.Vector3();
   const lockSeed = Array.from({ length: locks.length }, () => rnd());
+  // Hops from the outline (vertices on an edge used by one triangle only), so the colour can roll into the painted short
+  // hair at the edge: seen in Unity and the preview, a mass in mid-length colour shows as a pale shell with a hard lip
+  // above the ears where the fade starts below it.
+  const edgeUse = new Map<number, number>();
+  const ekey = (a: number, b: number) => (a < b ? a * V + b : b * V + a);
+  for (let t = 0; t < tris.length; t += 3) for (let e = 0; e < 3; e++) { const k2 = ekey(tris[t + e], tris[t + ((e + 1) % 3)]); edgeUse.set(k2, (edgeUse.get(k2) ?? 0) + 1); }
+  const hop = new Int32Array(V).fill(1 << 20);
+  const nb0: number[][] = Array.from({ length: V }, () => []);
+  for (let t = 0; t < tris.length; t += 3) for (let e = 0; e < 3; e++) { const a = tris[t + e], b = tris[t + ((e + 1) % 3)]; nb0[a].push(b); nb0[b].push(a); }
+  let front: number[] = [];
+  edgeUse.forEach((n, k2) => { if (n === 1) { const a = Math.floor(k2 / V), b = k2 % V; for (const q of [a, b]) if (hop[q] !== 0) { hop[q] = 0; front.push(q); } } });
+  while (front.length) { const nx: number[] = []; for (const q of front) for (const r of nb0[q]) if (hop[r] > hop[q] + 1) { hop[r] = hop[q] + 1; nx.push(r); } front = nx; }
+  const edgeRoll = o.edgeRollCells ?? 3;
   for (let i = 0; i < V; i++) {
     const k = vCell[i];
     const az = vAz[i], ph = vPh[i];
@@ -484,10 +500,13 @@ export function buildHairMass(locks: MassLockInput[], restNodesNow: THREE.Vector
     seeds[i] = g0 >= 0 ? lockSeed[Math.floor(g0 / nodesPerLock)] : rnd();
     // the deepest layer: a little darker than the locks (as the base shells were: layer AO 0.7, scalp root 0.4) and
     // from the root half of the colour gradient, so gaps read as depth, not as a black hole
-    layerAO[i] = 0.7;
+    // Toward the outline (edgeRollCells hops) it takes the root colour and full scalp-root shading, the colour of the
+    // painted short hair it meets, so the edge reads as the hair thinning into the fade instead of a lip.
+    const edge = edgeRoll > 0 ? 1 - sstep(0, edgeRoll, hop[i]) : 0;
+    layerAO[i] = 0.7 - 0.12 * edge;
     cardMask[i] = 0;
-    scalpRoot[i] = 0.4;
-    gradT[i] = 0.05 + 0.15 * crown + 0.3 * Math.min(1, ph / Math.max(0.5, lowest));
+    scalpRoot[i] = 0.4 + 0.6 * edge;
+    gradT[i] = (0.05 + 0.15 * crown + 0.3 * Math.min(1, ph / Math.max(0.5, lowest))) * (1 - edge);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));

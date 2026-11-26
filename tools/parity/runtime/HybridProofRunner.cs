@@ -84,8 +84,8 @@ public class HybridProofRunner : MonoBehaviour
 
         // 2) the matrix
         var resList = new[] { new Res { w = 1920, h = 1080, name = "1080p" }, new Res { w = 2560, h = 1440, name = "1440p" } };
-        md.AppendLine("| res | alpha | camera | hair | GPU ms/frame (median, FTM) | burst ms/render | hair GPU cost ms | overdraw mean/p95/max | shimmer (hair only) | pops | solver+mesh CPU ms |");
-        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|");
+        md.AppendLine("| res | alpha | camera | hair | GPU ms/frame (median, FTM) | burst ms/render | hair GPU cost ms | overdraw mean/p95/max | shimmer (hair only) | pops | NaN/inf px (none) | solver+mesh CPU ms |");
+        md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|");
         foreach (var res in resList)
             foreach (var mode in new[] { "a2c", "taa" })
             {
@@ -111,11 +111,11 @@ public class HybridProofRunner : MonoBehaviour
                         md.AppendLine("| " + res.name + " | " + (a2c ? "MSAA " + a2cSamples + "x + A2C" : "clip + dither + TAA") + " | " + dist + " | " + hv
                             + " | " + F(st.gpuMedian) + " (none " + F(none.gpuMedian) + ") | " + F(st.burst) + " (none " + F(none.burst) + ") | " + F(cost)
                             + " | " + (st.odMean > 0 ? F(st.odMean, 1) + " / " + F(st.odP95, 1) + " / " + F(st.odMax, 0) : "see TAA row")
-                            + " | " + F(shim, 4) + " (raw " + F(st.shimmer, 4) + ", peak " + F(st.shimmerPeak, 4) + ") | " + st.pops + " | " + F(st.cpuMs) + " |");
+                            + " | " + F(shim, 4) + " (raw " + F(st.shimmer, 4) + ", peak " + F(st.shimmerPeak, 4) + ") | " + st.pops + " | " + st.badPx + (st.badFirst >= 0 ? " from f" + st.badFirst : "") + " (" + none.badPx + ") | " + F(st.cpuMs) + " |");
                         json.Add("{\"run\":\"" + run + "\",\"gpuMedianMs\":" + J(st.gpuMedian) + ",\"gpuNoneMs\":" + J(none.gpuMedian) + ",\"burstMs\":" + J(st.burst)
                             + ",\"burstNoneMs\":" + J(none.burst) + ",\"hairCostMs\":" + J(cost) + ",\"overdrawMean\":" + J(st.odMean) + ",\"overdrawP95\":" + J(st.odP95)
                             + ",\"overdrawMax\":" + J(st.odMax) + ",\"hairCoverage\":" + J(st.odCoverage) + ",\"shimmerHair\":" + J(shim) + ",\"shimmerRaw\":" + J(st.shimmer)
-                            + ",\"shimmerPeak\":" + J(st.shimmerPeak) + ",\"pops\":" + st.pops + ",\"cpuMs\":" + J(st.cpuMs) + "}");
+                            + ",\"shimmerPeak\":" + J(st.shimmerPeak) + ",\"pops\":" + st.pops + ",\"badPx\":" + st.badPx + ",\"badPxNone\":" + none.badPx + ",\"cpuMs\":" + J(st.cpuMs) + "}");
                         Flush();
                     }
                 }
@@ -127,7 +127,7 @@ public class HybridProofRunner : MonoBehaviour
             + "Burst = wall time of " + timingRepeats + " back-to-back renders of one frame, then a GPU sync, divided by " + timingRepeats + ". "
             + "Overdraw = rasterised hair layers per covered pixel, clipped fragments included (an upper bound). "
             + "Shimmer = mean |f(t+1) - 2 f(t) + f(t-1)| of linear luminance over the frame, minus the no-hair run: smooth motion scores low, flicker and pops score high. "
-            + "Pops = frames whose shimmer is over 3x the run's median. TAA here has camera motion vectors only (the hair mesh is written on the CPU), so hair that moves with the head can ghost.");
+            + "Pops = frames whose shimmer is over 3x the run's median. NaN/inf px = sampled pixels (every 2nd row and column) that were not finite, over the run, with the first frame; they count as black in the shimmer. TAA here has camera motion vectors only (the hair mesh is written on the CPU), so hair that moves with the head can ghost.");
         Flush();
         Log("HYBRIDPROOF RESULT PASS " + Path.Combine(outDir, "summary.md"));
 #if UNITY_EDITOR
@@ -135,7 +135,7 @@ public class HybridProofRunner : MonoBehaviour
 #endif
     }
 
-    class RunStats { public double gpuMedian, burst, shimmer, shimmerPeak, cpuMs, odMean, odP95, odMax, odCoverage; public int pops; }
+    class RunStats { public double gpuMedian, burst, shimmer, shimmerPeak, cpuMs, odMean, odP95, odMax, odCoverage; public int pops; public long badPx; public int badFirst = -1; }
 
     // ---- motion: the web app's turn (HairViewport applyMotionPose / cpu_preview --pose turn), mirrored into Unity ----
     void Pose(int f)
@@ -265,7 +265,10 @@ public class HybridProofRunner : MonoBehaviour
                 for (int x = 0; x < gw; x++)
                 {
                     int o = ((y * step) * W + x * step) * 4;
-                    l2[y * gw + x] = 0.2126f * Mathf.HalfToFloat(px[o]) + 0.7152f * Mathf.HalfToFloat(px[o + 1]) + 0.0722f * Mathf.HalfToFloat(px[o + 2]);
+                    float lum = 0.2126f * Mathf.HalfToFloat(px[o]) + 0.7152f * Mathf.HalfToFloat(px[o + 1]) + 0.0722f * Mathf.HalfToFloat(px[o + 2]);
+                    // a NaN or infinite pixel (shader output) would poison the whole mean: count it, score it as black
+                    if (float.IsNaN(lum) || float.IsInfinity(lum)) { st.badPx++; if (st.badFirst < 0) st.badFirst = f; lum = 0f; }
+                    l2[y * gw + x] = lum;
                 }
             if (l0 != null)
             {
