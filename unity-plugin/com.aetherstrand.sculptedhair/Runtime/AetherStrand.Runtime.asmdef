@@ -1,14 +1,22 @@
 {
-  "name": "AetherStrand.Runtime",
-  "rootNamespace": "AetherStrand",
-  "references": [],
-  "includePlatforms": [],
-  "excludePlatforms": [],
-  "allowUnsafeCode": false,
-  "overrideReferences": false,
-  "precompiledReferences": [],
-  "autoReferenced": true,
-  "defineConstraints": [],
-  "versionDefines": [],
-  "noEngineReferences": false
+    "name": "AetherStrand.Runtime",
+    "rootNamespace": "AetherStrand",
+    "references": [
+        "Unity.Burst"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "1.8.0",
+            "define": "AETHERSTRAND_BURST"
+        }
+    ],
+    "noEngineReferences": false
 }

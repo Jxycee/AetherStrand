@@ -16,5 +16,8 @@
   ],
   "author": {
     "name": "AetherStrand Toolkit"
+  },
+  "dependencies": {
+    "com.unity.burst": "1.8.12"
   }
 }
