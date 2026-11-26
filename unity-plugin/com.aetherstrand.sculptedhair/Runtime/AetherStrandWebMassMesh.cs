@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -20,7 +21,7 @@ namespace AetherStrand
         public Vector3 fitScale = Vector3.one;
         public Vector3 fitOffset = Vector3.zero;
         public string SeatReport = "mass not seated";
-        Vector3[] seat; // per-vertex head-local offset that seats the mass on the character's own skin (SeatOnSkin)
+        Vector3[] seat; // per-vertex head-local offset that fits the mass to the character's skull (ConformToSkin)
 
         public AetherStrandWebMassMesh(AetherStrandWebMass mass)
         {
@@ -48,95 +49,41 @@ namespace AetherStrand
         }
 
         /// <summary>
-        /// Seat the mass on the character's own skin. The web builds it 1 mm or more over the web head (or over the head the
-        /// generator conformed it to), and the per-axis fit only scales that head; where the character's skull bulges past
-        /// the scaled web head (above the ears on Tobin) the mass sank into the skin, and the scalp paint showed through as a
-        /// tan band with a hard edge where the mass came back out (proof rerun 2, ear isolation). Each vertex is moved along
-        /// the ray from the head centre so it stands its own rest height over the skin the ray meets, as the web's conform does.
+        /// Fit the mass to the character's real skull, exactly as the web generator does when a character head is loaded
+        /// (characterHead.ts buildHeadConformMap + conformPoint, applied through hairMass's conform hook). The web builds the
+        /// mass over its ellipsoid scalp; a character's skull bulges past it in places (Tobin: up to 9% at the forehead, 2-7%
+        /// over the upper sides) and is smaller elsewhere, so without this the mass sinks into the skin or floats off it.
         /// skinHeadLocal: the character's head-weighted skin vertices in head-bone-local space (AetherStrandWebImport).
         /// Call once after an Update at the rest pose; the offsets then ride along in every Update.
         /// </summary>
-        public void SeatOnSkin(Vector3[] skinHeadLocal, Vector3 headCenterLocal, float minGapLocal)
+        public void ConformToSkin(Vector3[] skinHeadLocal)
         {
             seat = null;
             if (!useFit || skinHeadLocal == null || skinHeadLocal.Length == 0) return;
-            const int AZ = 120, PH = 60; // 3 degree cells
-            var cellR = new System.Collections.Generic.List<float>[AZ * PH];
-            float fs = (fitScale.x + fitScale.y + fitScale.z) / 3f;
-            foreach (var p in skinHeadLocal)
-            {
-                Vector3 d = p - headCenterLocal; float r = d.magnitude;
-                // only the skull's shell: points far inside (mouth, eye sockets) or far outside (shoulders) are not scalp
-                if (r < 0.15f * fs || r > 0.5f * fs) continue;
-                int k = Cell(d / r, AZ, PH);
-                (cellR[k] ?? (cellR[k] = new System.Collections.Generic.List<float>())).Add(r);
-            }
-            // per cell, the median radius: an ear or a strand of skin standing off the skull is a minority in its cell
-            var med = new float[AZ * PH];
-            for (int k = 0; k < med.Length; k++) { var l = cellR[k]; if (l == null) { med[k] = -1f; continue; } l.Sort(); med[k] = l[l.Count / 2]; }
-            int V = mass.VertexCount;
-            var off = new float[V]; var dir = new Vector3[V]; var has = new bool[V];
-            float maxMove = 0.015f * fs; // a correction past 1.5 cm means the lookup found something that is not the scalp
+            var pts = new float[skinHeadLocal.Length * 3];
+            for (int i = 0; i < skinHeadLocal.Length; i++) { Vector3 w = ToWeb(skinHeadLocal[i]); pts[i * 3] = w.x; pts[i * 3 + 1] = w.y; pts[i * 3 + 2] = w.z; }
+            float[] map = AetherStrandHeadConform.Build(pts);
+            int V = mass.VertexCount; seat = new Vector3[V];
+            int moved = 0; double outMax = 0, inMax = 0;
             for (int i = 0; i < V; i++)
             {
-                Vector3 d = verts[i] - headCenterLocal; // the mesh as last written, at the snapped rest pose (call after Update)
-                float r = d.magnitude; if (r < 1e-6f) continue;
-                dir[i] = d / r;
-                int ci = Cell(dir[i], AZ, PH), ca = ci % AZ, cp = ci / AZ;
-                float sum = 0f; int n = 0;
-                for (int dp = -1; dp <= 1; dp++) for (int da = -1; da <= 1; da++)
-                {
-                    int pp = cp + dp; if (pp < 0 || pp >= PH) continue;
-                    float m = med[pp * AZ + ((ca + da + AZ) % AZ)]; if (m > 0f) { sum += m; n++; }
-                }
-                if (n == 0) continue;
-                float target = sum / n + Mathf.Max(minGapLocal, mass.RestHeight[i] * fs);
-                off[i] = Mathf.Clamp(target - r, -maxMove, maxMove); has[i] = true;
+                Vector3 w = ToWeb(verts[i]); // the mesh as last written, at the snapped rest pose (call after Update)
+                AetherStrandHeadConform.Offset(map, w.x, w.y, w.z, out double dx, out double dy, out double dz);
+                seat[i] = new Vector3((float)(-dx * fitScale.x), (float)(dy * fitScale.y), (float)(dz * fitScale.z));
+                double len = Math.Sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                Vector3 rad = w - new Vector3(0f, 0.425f, -0.01f);
+                bool outward = dx * rad.x + dy * rad.y + dz * rad.z >= 0;
+                if (len > 0.2) moved++;
+                if (outward) outMax = Math.Max(outMax, len); else inMax = Math.Max(inMax, len);
             }
-            var raw = (float[])off.Clone();
-            // smooth the correction over the mass so 3 degree cells leave no steps (neighbours from the triangles)
-            var nb = new System.Collections.Generic.List<int>[V];
-            for (int t = 0; t < mass.Indices.Length; t += 3)
-                for (int e = 0; e < 3; e++)
-                {
-                    int a = mass.Indices[t + e], b = mass.Indices[t + (e + 1) % 3];
-                    (nb[a] ?? (nb[a] = new System.Collections.Generic.List<int>())).Add(b);
-                    (nb[b] ?? (nb[b] = new System.Collections.Generic.List<int>())).Add(a);
-                }
-            for (int pass = 0; pass < 4; pass++)
-            {
-                var nx = (float[])off.Clone();
-                for (int i = 0; i < V; i++)
-                {
-                    if (!has[i] || nb[i] == null) continue;
-                    float s2 = off[i]; int c = 1;
-                    foreach (int q in nb[i]) if (has[q]) { s2 += off[q]; c++; }
-                    nx[i] = s2 / c;
-                }
-                off = nx;
-            }
-            // smoothing must not pull a vertex back under the skin: keep it within 0.5 mm of its own correction
-            for (int i = 0; i < V; i++) if (has[i]) off[i] = Mathf.Max(off[i], raw[i] - 0.0005f * fs);
-            seat = new Vector3[V];
-            int moved = 0, nHas = 0; float outMax = 0f, inMax = 0f;
-            for (int i = 0; i < V; i++)
-            {
-                if (!has[i]) continue;
-                nHas++; seat[i] = dir[i] * off[i];
-                if (Mathf.Abs(off[i]) > 0.0002f * fs) moved++;
-                outMax = Mathf.Max(outMax, off[i]); inMax = Mathf.Max(inMax, -off[i]);
-            }
-            SeatReport = "mass seated on skin: " + nHas + "/" + V + " vertices found skin, " + moved + " moved; largest push out "
-                + (outMax / fs * 1000f).ToString("F1") + " web-mm, in " + (inMax / fs * 1000f).ToString("F1") + " web-mm";
+            SeatReport = "mass conformed to skull: " + moved + "/" + V + " vertices moved over 0.2 web-mm; largest push out "
+                + outMax.ToString("F1") + " web-mm, in " + inMax.ToString("F1") + " web-mm";
         }
 
-        static int Cell(Vector3 n, int AZ, int PH)
-        {
-            float az = Mathf.Atan2(n.x, n.z), ph = Mathf.Acos(Mathf.Clamp(n.y, -1f, 1f));
-            int a = Mathf.Clamp((int)((az + Mathf.PI) / (2f * Mathf.PI) * AZ), 0, AZ - 1);
-            int p = Mathf.Clamp((int)(ph / Mathf.PI * PH), 0, PH - 1);
-            return p * AZ + a;
-        }
+        // head-bone-local -> rest-head-local web space: the inverse of the per-axis fit in Update (X mirrored)
+        Vector3 ToWeb(Vector3 v) { return new Vector3(-(v.x - fitOffset.x) / fitScale.x, (v.y - fitOffset.y) / fitScale.y, (v.z - fitOffset.z) / fitScale.z); }
+
+
 
         /// <summary>Follow the solver and upload. Same arguments as AetherStrandWebMesh.Update.</summary>
         public void Update(AetherStrandWebSolver solver, double hpx, double hpy, double hpz, double hqx, double hqy, double hqz, double hqw, float unitScale)

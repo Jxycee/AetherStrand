@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Parity test of the plugin's head conform port (Runtime/AetherStrandHeadConform.cs) against the web's characterHead.ts. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../../unity-plugin/com.aetherstrand.sculptedhair/Runtime/AetherStrandHeadConform.cs" />
+    <Compile Include="../../../unity-plugin/com.aetherstrand.sculptedhair/Runtime/AetherStrandWebData.cs" />
+    <Compile Include="../../../unity-plugin/com.aetherstrand.sculptedhair/Runtime/AetherStrandWebSolver.cs" />
+  </ItemGroup>
+</Project>

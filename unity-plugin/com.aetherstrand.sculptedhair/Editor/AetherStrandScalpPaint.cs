@@ -53,9 +53,8 @@ namespace AetherStrand.Editor
             return mr;
         }
 
-        /// <summary>Head-weighted skin triangles (all three corners weighted > 0.5 to the head bone) that the paint can reach, in head-bone space.</summary>
         /// <summary>Head-bone-local positions of the character's skin vertices weighted over half to the head bone (the same
-        /// vertices the paint shell is built from). The inner mass is seated on them (AetherStrandWebMassMesh.SeatOnSkin).</summary>
+        /// vertices the paint shell is built from). The inner mass is conformed to them (AetherStrandWebMassMesh.ConformToSkin).</summary>
         public static Vector3[] HeadSkinPoints(GameObject character, Transform head)
         {
             var pts = new List<Vector3>();
@@ -81,6 +80,7 @@ namespace AetherStrand.Editor
             return pts.ToArray();
         }
 
+        /// <summary>Head-weighted skin triangles (all three corners weighted > 0.5 to the head bone) that the paint can reach, in head-bone space.</summary>
         public static Mesh BuildShell(GameObject character, Transform head, AetherStrandHeadFit.Fit fit, ScalpPaintData paint, float lift)
         {
             var pos = new List<Vector3>(); var nrm = new List<Vector3>(); var web = new List<Vector3>(); var tris = new List<int>();

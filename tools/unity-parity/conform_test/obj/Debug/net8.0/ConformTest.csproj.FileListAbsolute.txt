@@ -1,0 +1,15 @@
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.GeneratedMSBuildEditorConfig.editorconfig
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.AssemblyInfoInputs.cache
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.AssemblyInfo.cs
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.csproj.CoreCompileInputs.cache
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.sourcelink.json
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/bin/Debug/net8.0/ConformTest
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/bin/Debug/net8.0/ConformTest.deps.json
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/bin/Debug/net8.0/ConformTest.runtimeconfig.json
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/bin/Debug/net8.0/ConformTest.dll
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/bin/Debug/net8.0/ConformTest.pdb
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.dll
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/refint/ConformTest.dll
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.pdb
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ConformTest.genruntimeconfig.cache
+/home/claude/jxycee/aetherstrand/tools/unity-parity/conform_test/obj/Debug/net8.0/ref/ConformTest.dll

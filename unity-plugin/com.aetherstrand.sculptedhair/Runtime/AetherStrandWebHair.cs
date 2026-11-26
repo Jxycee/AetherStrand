@@ -36,7 +36,6 @@ namespace AetherStrand
         /// this skin, not on the scaled web head, so it cannot sink into a skull that bulges past it (AetherStrandWebMassMesh.SeatOnSkin).</summary>
         [HideInInspector] public Vector3[] massSkin = new Vector3[0];
         /// <summary>Head centre in head-bone-local space (the fitted web head centre), for SeatOnSkin.</summary>
-        [HideInInspector] public Vector3 massSkinCenter;
         [Tooltip("Simulate at the web's 60 Hz (deterministic); false = one variable step per frame (web live mode).")]
         public bool fixedTimestep = true;
         [Tooltip("Off: the hair steps itself every frame. On: it only moves when Tick is called (test harnesses, cutscene scrubbing).")]
@@ -125,7 +124,7 @@ namespace AetherStrand
             if (massBuilder != null && massBuilder.useFit && massSkin != null && massSkin.Length > 0)
             {
                 // seat the mass on the character's skin from its rest pose; 1 mm in head-bone units, the web mass's edge height
-                massBuilder.SeatOnSkin(massSkin, massSkinCenter, 0.001f / Mathf.Max(1e-6f, fitBone.lossyScale.y));
+                massBuilder.ConformToSkin(massSkin);
                 Refresh();
                 Debug.Log("[AetherStrand] " + massBuilder.SeatReport);
             }
