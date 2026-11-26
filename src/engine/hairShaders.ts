@@ -279,12 +279,19 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Mode 1: isFadeCap dithered-opaque fade: solid before the fade starts, mostly opaque (uFadeOpacity) through it, fine dither only in the last uFadeSoftness
     bool isFadeCap = vCardMask > 0.15 && vCardMask < 0.45;
     float fadeU0 = isFadeCap ? fadeU(vCardMask, t) : 0.0;
+    float fadeCovA2C = 1.0;
     if (isFadeCap) {
       float fadeTail = smoothstep(1.0 - clamp(uFadeSoftness, 0.0, 1.0), 1.0, fadeU0);
       float fadeCov = mix(1.0, uFadeOpacity * (1.0 - 0.45 * fadeU0), smoothstep(0.0, 0.2, fadeU0)) * (1.0 - fadeTail);
+    #ifdef HAIR_A2C
+      // with MSAA the coverage goes out as is: the per-pixel dither below only resolves under temporal AA, and under MSAA
+      // it showed as dot clouds at the hairline (Unity rerun 5, close_fadecap_test.png)
+      fadeCovA2C = fadeCov;
+    #else
       float fadeIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
       float fadeWn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
       if (fadeCov - mix(fadeIgn, fadeWn, 0.45) < 0.0) discard;
+    #endif
     }
 
     // Fine realistic multi-filament UVs scaled for slender sculpted 3D locks
@@ -305,7 +312,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     // across root->mid-body and dissolve cleanly into fine individual hair wisps across the outer 42% tip!
     // Strand card (hybrid fine strands, mask 0.75): a few separate hairs along the whole length (strandCardAlpha)
     // With MSAA (HAIR_A2C) the coverage goes out as alpha-to-coverage; without it, the same 0.36 cut as before.
-    float hairCov = 1.0;
+    float hairCov = fadeCovA2C;
     if (vCardMask > 0.5 && vCardMask < 0.9) {
       hairCov = strandCardAlpha(vUv.x, t, vStrandSeed, laneFw, tFw);
     #ifndef HAIR_A2C

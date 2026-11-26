@@ -89,7 +89,7 @@ Shader "AetherStrand/ScalpPaint"
                 float st = max(2.0, stretch);
                 float c1 = FibreOctave(az, phi, dens, grain, 260.0, st, 0.34, 0.14, 0.5, 0.05, 0.85, 0.28, float3(2.91, 37.3, 4.0), float2(3.17, 17.13), fwAz * 260.0);
                 float c2 = FibreOctave(az, phi, dens, grain, 680.0, st * 1.25, 0.38, 0.12, 0.48, 0.04, 0.82, 0.24, float3(4.13, 19.1, 6.0), float2(5.71, 23.41), fwAz * 680.0);
-                return saturate(lerp(pow(dens, 0.9), lerp(c1, c2, 0.45), min(0.85, grain * 0.78)));
+                return saturate(lerp(pow(max(dens, 1e-4), 0.9), lerp(c1, c2, 0.45), min(0.85, grain * 0.78)));
             }
 
             // mirrors paintRamp in src/engine/scalpPaint.ts: one smooth monotone curve 1 -> ed (at edge) -> 0 (at edge + feather)

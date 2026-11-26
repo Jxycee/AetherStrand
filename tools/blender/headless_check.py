@@ -65,7 +65,7 @@ scene.collection.objects.link(cam)
 scene.camera = cam
 
 # the file is Blender Z up, -Y front (the character faces -Y)
-views = {"front": -90.0, "left": 180.0, "back": 90.0, "threequarter": -45.0}
+views = {"front": -90.0, "left": 0.0, "back": 90.0, "threequarter": -45.0}  # left = the character's left (+X)
 renders = {}
 for name, az in views.items():
     a = math.radians(az)

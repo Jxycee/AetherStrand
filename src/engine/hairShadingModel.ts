@@ -236,7 +236,7 @@ const shiftTangent = (out: THREE.Vector3, T: THREE.Vector3, N: THREE.Vector3, s:
 
 /**
  * Shades one hair pixel exactly as the viewport fragment shader (mode "shaded"). Returns linear RGB in out, or null when
- * the pixel is cut away (frayed tip). Fade caps' screen dither is left to the caller (it needs the pixel position).
+ * the pixel is cut away (frayed tip). Fade caps: plain coverage under A2C; their non-A2C screen dither is left to the caller.
  */
 export function shadeHairPixel(p: ShadeInput, e: ShadeEnv, out: number[]): number[] | null {
   const S = e.sheen, tex = e.tex, w = tex.width, h = tex.height;
@@ -254,6 +254,12 @@ export function shadeHairPixel(p: ShadeInput, e: ShadeEnv, out: number[]): numbe
   const hasFw = p.dudx !== undefined;
   const dudx = p.dudx ?? 0, dudy = p.dudy ?? 0, dtdx = p.dtdx ?? 0, dtdy = p.dtdy ?? 0;
   const a2c = p.covThr !== undefined;
+  if (isFadeCap && a2c) {
+    // fade cap under A2C: its plain coverage (hairShaders.ts fadeCovA2C; uFadeOpacity 0.85, uFadeSoftness 0.85 defaults)
+    const tail = sstep(1 - 0.85, 1, fadeU0);
+    const cov = (1 + (0.85 * (1 - 0.45 * fadeU0) - 1) * sstep(0, 0.2, fadeU0)) * (1 - tail);
+    if (cov <= p.covThr!) return null;
+  }
   if (p.cardMask > 0.5 && p.cardMask < 0.9) {
     // strand card (hybrid fine strands): same coverage as hairShaders.ts strandCardAlpha
     const laneSlope = hasFw ? Math.abs(strandLaneX(Math.min(1, p.u + 1e-4)) - strandLaneX(Math.max(0, p.u - 1e-4))) / 2e-4 * 1.5 : 0;

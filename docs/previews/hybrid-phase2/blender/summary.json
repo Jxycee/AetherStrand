@@ -1,0 +1,41 @@
+{
+  "source": "mage.glb",
+  "blender": "5.3.0",
+  "meshes": {
+    "Hair_FadeCaps": {
+      "vertices": 3256,
+      "triangles": 5412
+    },
+    "Hair_Locks": {
+      "vertices": 86110,
+      "triangles": 144570
+    },
+    "Hair_Mass": {
+      "vertices": 3997,
+      "triangles": 7865
+    },
+    "Hair_StrandCards": {
+      "vertices": 6540,
+      "triangles": 10980
+    }
+  },
+  "bounds": {
+    "min": [
+      -0.44108325242996216,
+      -0.40062668919563293,
+      0.48394355177879333
+    ],
+    "max": [
+      0.4269349277019501,
+      0.4631302058696747,
+      1.2973910570144653
+    ]
+  },
+  "renders": {
+    "front": "front.png",
+    "left": "left.png",
+    "back": "back.png",
+    "threequarter": "threequarter.png"
+  },
+  "fbx": "hair.fbx"
+}

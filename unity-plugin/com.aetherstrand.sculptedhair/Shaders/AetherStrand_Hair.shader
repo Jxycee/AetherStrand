@@ -217,6 +217,10 @@ Shader "AetherStrand/SculptedHair_URP"
                 float tail = smoothstep(1.0 - saturate(_FadeSoftness), 1.0, u);
                 // solid hair before the fade starts (u = 0); then eases to _FadeOpacity over the first part of the fade, then dithers out
                 float coverage = lerp(1.0, _FadeOpacity * (1.0 - 0.45 * u), smoothstep(0.0, 0.2, u)) * (1.0 - tail);
+                // With MSAA + A2C the coverage goes to the hardware as is: the per-pixel dither below is resolved by TAA but
+                // not by MSAA, so there it showed as dot clouds at the hairline (rerun 5, close_fadecap_test.png).
+                soft = true;
+                directCov = coverage;
                 // ordered IGN broken up by a little white noise so the dither reads as fine stubble grain, not a regular grid
                 float wn = frac(sin(dot(floor(screenPosXY), float2(12.9898, 78.233))) * 43758.5453);
                 return coverage - lerp(AetherInterleavedGradientNoise(screenPosXY), wn, 0.45);
@@ -262,7 +266,7 @@ Shader "AetherStrand/SculptedHair_URP"
 
         // Forward pass alpha. With _ALPHA_TO_COVERAGE (MSAA on, AlphaToMask on) the soft edges are not clipped but turned
         // into a sharpened coverage (margin over its screen-space rate, about one pixel wide), so MSAA resolves them into
-        // smooth fine tips without temporal accumulation; fade-cap dither is still clipped. Otherwise: clip, alpha 1.
+        // smooth fine tips without temporal accumulation; fade caps send their plain coverage. Otherwise: clip, alpha 1.
         float AetherForwardAlpha(float2 uv, float4 vertColor, float2 screenPosXY)
         {
             #ifdef _USE_ALPHA_CLIP
@@ -270,7 +274,7 @@ Shader "AetherStrand/SculptedHair_URP"
             float m = AetherTipMargin(uv, vertColor, screenPosXY, soft, directCov);
             #ifdef _ALPHA_TO_COVERAGE
             float a = saturate(m / max(fwidth(m), 0.0001) + 0.5);
-            if (directCov >= 0.0) a = directCov; // strand cards: already pixel-filtered, sharpening would re-alias them
+            if (directCov >= 0.0) a = directCov; // strand cards (pixel-filtered) and fade caps (smooth gradient): sent as is
             if (!soft) { clip(m); a = 1.0; }
             clip(a - 0.001);
             return a;
