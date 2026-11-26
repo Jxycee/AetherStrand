@@ -7,6 +7,7 @@ import { conformPoint, type CharacterHead } from '../engine/characterHead';
 import { hairShellPolylines } from '../engine/hairShell';
 import { naturalMaxHairlinePhi } from '../engine/hairBuilder';
 import { HairPhysicsSystem, HairSimulationStats } from '../engine/hairPhysics';
+import { buildPresetGeometry } from '../engine/presetGeometryExport';
 import {
   createHairShaderMaterial,
   LIGHTING_RIGS,
@@ -40,6 +41,8 @@ export interface HairViewportHandle {
   resetCamera: () => void;
   getTexturePack: () => HairTexturePack | null;
   getExportLockGeometry: () => ExportedHairLock[];
+  /** Full PresetGeometry.json (schema 2.1, hybridMass and scalpPaint blocks when present) of the live hair, or null before it is built. */
+  getPresetGeometry: (presetId: string, presetName: string) => any | null;
   auditQuality: () => HairQualityAudit | null;
   stepFrames: (count: number, overrideMotion?: MotionMode) => HairQualityAudit | null;
   captureTurnaroundSheet: (opts?: CaptureOptions) => { dataUrl: string; audit: HairQualityAudit } | null;
@@ -379,6 +382,10 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
     getTexturePack: () => texturePackRef.current,
     getExportLockGeometry: () =>
       hairSystemRef.current?.exportLockGeometry(physicsRef.current.strandWidthScale) ?? [],
+    getPresetGeometry: (presetId: string, presetName: string) => {
+      const hair = hairSystemRef.current;
+      return hair ? buildPresetGeometry(hair, physicsRef.current.strandWidthScale ?? 1, presetId, presetName) : null;
+    },
     auditQuality: () => {
       const bust = bustRigRef.current;
       const hair = hairSystemRef.current;

@@ -3186,12 +3186,34 @@ const CANONICAL_TEXTURE_METAS = import.meta.glob(
   { query: '?raw', import: 'default', eager: true }
 ) as Record<string, string>;
 
-function applyCanonicalPlugin(files: PluginFileEntry[], pipeline: RenderPipeline): PluginFileEntry[] {
+const CANONICAL_PACKAGE_JSON = import.meta.glob('../../unity-plugin/com.aetherstrand.sculptedhair/package.json', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+function applyCanonicalPlugin(files: PluginFileEntry[], pipeline: RenderPipeline, presetGeometry: any): PluginFileEntry[] {
   if (pipeline !== 'urp') return files;
+  // The live web geometry in full (schema 2.1): per-lock mesh extras plus the hybridMass and scalpPaint blocks, written by
+  // the same code as tools/unity-parity/web_export.ts. The plugin's importer reads it from the package's Presets/ folder;
+  // the Blender folder gets the same file so the bridge sees the hybrid too. Old readers ignore the extra fields.
+  if (presetGeometry) {
+    const json = JSON.stringify(presetGeometry);
+    const blender = files.find((f) => f.path === 'AetherStrand_Blender/PresetGeometry.json');
+    if (blender) blender.content = json;
+    files.push({
+      path: 'AetherStrand_Unity/Presets/PresetGeometry.json',
+      name: 'PresetGeometry.json',
+      category: 'unity',
+      language: 'json',
+      description: `Live web geometry for the plugin importer (${presetGeometry.lockCount} locks${presetGeometry.hybridMass ? ', hybrid mass' : ''}${presetGeometry.scalpPaint ? ', scalp paint' : ''}).`,
+      content: json,
+    });
+  }
   const prefix = '../../unity-plugin/com.aetherstrand.sculptedhair/';
   const byPath = new Map(files.map((f) => [f.path, f] as const));
   const langOf = (name: string) => (name.endsWith('.cs') ? 'csharp' : name.endsWith('.shader') ? 'hlsl' : name.endsWith('.meta') ? 'yaml' : 'json');
-  for (const [key, content] of [...Object.entries(CANONICAL_PLUGIN_SOURCES), ...Object.entries(CANONICAL_TEXTURE_METAS)]) {
+  for (const [key, content] of [...Object.entries(CANONICAL_PLUGIN_SOURCES), ...Object.entries(CANONICAL_TEXTURE_METAS), ...Object.entries(CANONICAL_PACKAGE_JSON)]) {
     const rel = key.slice(prefix.length);
     const path = `AetherStrand_Unity/${rel}`;
     const name = rel.split('/').pop() as string;
@@ -3210,7 +3232,8 @@ export function generatePluginFiles(
   physics: PhysicsConfig,
   presetId: HairPresetId,
   pipeline: RenderPipeline,
-  exportedLocks: ExportedHairLock[] = []
+  exportedLocks: ExportedHairLock[] = [],
+  presetGeometry: any = null
 ): PluginFileEntry[] {
   const shaderCode =
     pipeline === 'urp' ? generateUrpHairShader(shader) : generateBuiltinHairShader(shader);
@@ -3352,5 +3375,5 @@ export function generatePluginFiles(
       description: 'Blender 4.x addon that auto-loads PresetGeometry.json, k-means clusters locks onto ~44 shared Hair_ bone chains, and exports Unity FBX (Linear VCol).',
       content: generateBlenderAddonPy(presetId),
     },
-  ], pipeline);
+  ], pipeline, presetGeometry);
 }

@@ -16,6 +16,7 @@ import { CharacterHead, loadCharacterHead } from './engine/characterHead';
 import { canvasToPngBlob, HairTexturePack } from './engine/hairTextures';
 import {
   generatePluginFiles,
+  getExportPresetMetadata,
   sanitizeExportLightingPreset,
   sanitizeExportPresetId,
 } from './generators/unityPluginGenerator';
@@ -575,7 +576,9 @@ export default function App() {
         liveLocks && liveLocks.length > 0
           ? liveLocks
           : buildExportLocksForBlender(presetId, buildConfig, physicsConfig.strandWidthScale);
-      const exportFiles = generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, activeLocks);
+      const exportName = customStyleName ?? getExportPresetMetadata(presetId).name;
+      const presetGeometry = viewportRef.current?.getPresetGeometry(sanitizeExportPresetId(presetId), exportName) ?? null;
+      const exportFiles = generatePluginFiles(shaderConfig, physicsConfig, presetId, pipeline, activeLocks, presetGeometry);
 
       for (const file of exportFiles) {
         zip.file(file.path, file.content);
