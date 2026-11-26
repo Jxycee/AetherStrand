@@ -50,7 +50,7 @@ import { compareMasks, fitSimilarity, headLandmarkPoints, loadRefSheet, refHairM
 import { computeProceduralHairTextureData, type HairTextureData } from '../../src/engine/hairTextures';
 import { bakeHairCards } from '../../src/engine/cardBake';
 import { displaySRGB, makeShadeEnv, rigLights, shadeHairPixel, SHEEN_DEFAULTS, SHEEN_LEGACY, type ShadeInput } from '../../src/engine/hairShadingModel';
-import { evalScalpPaint, hairlineJag, paintStreak, paintUnderShade, sampleArr, scalpAngles, scalpPaintAlpha, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
+import { evalScalpPaint, hairlineJag, paintFibreAlpha, paintSheen, paintStreak, paintUnderShade, sampleArr, scalpAngles, scalpPaintColor, type ScalpPaint } from '../../src/engine/scalpPaint';
 
 const args = process.argv.slice(2);
 const arg = (k: string, d?: string) => {
@@ -293,21 +293,15 @@ const shaderFull = {
   primaryShift: 0.05, primaryPower: 76, primaryIntensity: 0.32, secondaryShift: -0.14, secondaryPower: 24, secondaryIntensity: 0.2,
   rimIntensity: 0.3, rimPower: 3.4, rootAO: 0.74, grooveDepth: 0.6, strandVariation: 0.2, ...sh,
 };
-const grainAt = (az: number, phi: number) => {
-  // (grainStretch: cells longer along phi, narrower across, same area)
-  const gs = Math.sqrt(Math.max(1, paint?.grainStretch ?? 1));
-  const a = Math.floor(az * gs / 0.011), b = Math.floor(phi / gs / 0.011);
-  const h = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
-  return h - Math.floor(h);
-};
-/** paint alpha at a head-pivot-local point */
-const paintAlpha = (x: number, y: number, z: number) => {
+/** paint alpha at a head-pivot-local point; fwAz = pixel footprint in radians of azimuth (as fwidth in the shaders) */
+const paintAlpha = (x: number, y: number, z: number, fwAz = 0) => {
   if (!paint) return 0;
   const a = scalpAngles(x, y, z);
   const dens = evalScalpPaint(paint, a.az, a.phi);
-  return scalpPaintAlpha(dens, paint.grain, grainAt(a.az, a.phi));
+  return paintFibreAlpha(a.az, a.phi - hairlineJag(paint.irregularity ?? 0.5, a.az), dens, paint.grain, paint.grainStretch ?? 1, fwAz);
 };
 
+const _pN = new THREE.Vector3(), _pV = new THREE.Vector3();
 const BW = 440, BH = 480;
 const W = BW * AA, H = BH * AA;
 const views: { name: string; d: THREE.Vector3; up: THREE.Vector3; c: THREE.Vector3; ext: number }[] = [];
@@ -484,6 +478,14 @@ function renderView(vi: number) {
     if (minX > maxX || minY > maxY) return;
     const area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
     if (Math.abs(area) < 1e-9) return;
+    // world position step per DISPLAY pixel along x and y (for the paint fibres' footprint, as fwidth in the shaders)
+    let dPx = [0, 0, 0], dPy = [0, 0, 0];
+    if (wp) {
+      const w0x = (p[1][1] - p[2][1]) / area, w0y = (p[2][0] - p[1][0]) / area, w1x = (p[2][1] - p[0][1]) / area, w1y = (p[0][0] - p[2][0]) / area;
+      dPx = [0, 1, 2].map((k) => (w0x * (wp[0][k] - wp[2][k]) + w1x * (wp[1][k] - wp[2][k])) * AA);
+      dPy = [0, 1, 2].map((k) => (w0y * (wp[0][k] - wp[2][k]) + w1y * (wp[1][k] - wp[2][k])) * AA);
+    }
+    const wrapPi = (v: number) => v - Math.round(v / (Math.PI * 2)) * Math.PI * 2;
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const px = x + 0.5, py = y + 0.5;
@@ -512,17 +514,24 @@ function renderView(vi: number) {
           // c holds the lighting factor; blend skin and painted hair per pixel
           const k = w0 * c[0][0] + w1 * c[1][0] + w2 * c[2][0];
           const lx = w0 * wp[0][0] + w1 * wp[1][0] + w2 * wp[2][0], ly = w0 * wp[0][1] + w1 * wp[1][1] + w2 * wp[2][1] - 0.44, lz = w0 * wp[0][2] + w1 * wp[1][2] + w2 * wp[2][2];
-          const al = paintAlpha(lx, ly, lz);
+          const az0 = scalpAngles(lx, ly, lz).az;
+          const fwAz = paint ? Math.abs(wrapPi(scalpAngles(lx + dPx[0], ly + dPx[1], lz + dPx[2]).az - az0)) + Math.abs(wrapPi(scalpAngles(lx + dPy[0], ly + dPy[1], lz + dPy[2]).az - az0)) : 0;
+          const al = paintAlpha(lx, ly, lz, fwAz);
           paintBuf[idx] = al;
-          let st = 1;
+          let st = 1, sheen = 0;
           if (al > 0) {
             const sa = scalpAngles(lx, ly, lz); st = 0.82 + 0.36 * paintStreak(sa.az, sa.phi);
+            const pj = sa.phi - hairlineJag(paint!.irregularity ?? 0.5, sa.az);
             // darker under the hair, as the web and Unity shaders (paintUnderShade)
-            if (paint?.underShade) st *= paintUnderShade(paint.underShade, sa.phi - hairlineJag(paint.irregularity ?? 0.5, sa.az), sampleArr(paint.fullPhi, sa.az));
+            if (paint?.underShade) st *= paintUnderShade(paint.underShade, pj, sampleArr(paint.fullPhi, sa.az), sa.az);
+            // broad sheen as the shaders, on the scalp ellipsoid's normal (the preview keeps no per-pixel skin normal)
+            const dens = evalScalpPaint(paint!, sa.az, sa.phi);
+            _pN.set(lx / (0.282 * 0.282), (ly - 0.425) / (0.318 * 0.318), (lz + 0.01) / (0.31 * 0.31)).normalize();
+            sheen = paintSheen(_pN, key, _pV.copy(d), dens) / Math.max(1e-3, k);
           }
-          col[idx * 3] = k * (skin[0] + (cPaint.r * st - skin[0]) * al);
-          col[idx * 3 + 1] = k * (skin[1] + (cPaint.g * st - skin[1]) * al);
-          col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * st - skin[2]) * al);
+          col[idx * 3] = k * (skin[0] + (cPaint.r * (st + sheen) - skin[0]) * al);
+          col[idx * 3 + 1] = k * (skin[1] + (cPaint.g * (st + sheen) - skin[1]) * al);
+          col[idx * 3 + 2] = k * (skin[2] + (cPaint.b * (st + sheen) - skin[2]) * al);
           if (showGrid) {
             // scalp-coordinate grid: blue lines every 0.1 rad of |azimuth|, red every 0.1 rad of phi (thick at each 0.5)
             const sa = scalpAngles(lx, ly, lz), th = Math.abs(sa.az);

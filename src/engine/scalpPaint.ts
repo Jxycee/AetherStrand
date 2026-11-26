@@ -13,7 +13,7 @@
 //   irregularity (0..1) wobbles the whole profile along the azimuth by a small noise (hairlineJag), so the hairline is
 //   not a drawn curve but a natural, slightly uneven edge. color (optional '#rrggbb') overrides the paint colour; without
 //   it the paint takes the hair's own colour (scalpPaintColor).
-//   Partial density is drawn as a soft gradient mixed with grain stipple (scalpPaintAlpha), never a hard line.
+//   Partial density is drawn as a soft gradient mixed with directional short-hair fibres (paintFibreAlpha), never a hard line.
 // phi is the polar angle from the crown apex on the scalp ellipsoid (HEAD_CENTER_LOCAL, SCALP_RX/RY/RZ).
 //
 // Every style gets an automatic paint from where its locks touch the scalp (deriveScalpPaint). A style can override it
@@ -90,10 +90,12 @@ function vnoise(az: number, cells: number): number {
   return a + (b - a) * f * f * (3 - 2 * f);
 }
 
-/** Hairline wobble (rad) at azimuth az: two octaves of value noise, wrapping at the back seam, up to about +-0.035 rad at irregularity 1. */
+/** Hairline wave (rad) at azimuth az: one slow octave of value noise (28 cells, about 22 mm), wrapping at the back seam,
+ *  up to +-0.008 rad at irregularity 1. The older 150/440-cell jag (+-0.035 rad over a 0.035 rad feather) cut the edge
+ *  into scallops; the fine unevenness now comes from the fibres ending at staggered heights (paintFibreAlpha). */
 export function hairlineJag(irregularity: number, az: number): number {
   if (irregularity <= 0) return 0;
-  return irregularity * (0.024 * (vnoise(az, 150) - 0.5) * 2 + 0.011 * (vnoise(az, 440) - 0.5) * 2);
+  return irregularity * 0.008 * (vnoise(az, 28) - 0.5) * 2;
 }
 
 /** Paint density 0..1 at signed azimuth az and polar angle phi. */
@@ -125,16 +127,19 @@ export function paintRamp(phi: number, full: number, edge: number, ed: number, f
 }
 
 /** Width (rad) over which the under-hair shade eases in, from fullPhi up toward the crown. Mirrored in the GLSL and Unity shader. */
-export const UNDER_SHADE_BAND = 0.2;
+export const UNDER_SHADE_BAND = 0.32;
 
 /**
  * Brightness factor (0..1) of the paint under the hair: 1 - underShade at UNDER_SHADE_BAND or more above fullPhi, easing
- * to 1 at fullPhi. `phi` is the jagged phi (as evalScalpPaint uses it). Mirrored in scalpPaintMaterial.ts and the Unity
- * AetherStrand/ScalpPaint shader.
+ * to 1 just past fullPhi. The forehead (|az| under about 0.95) takes 55% less of it: bangs stand off the brow, so the
+ * hairline there is lit, while the sides and nape sit in the locks' shadow. `phi` is the jagged phi (as evalScalpPaint
+ * uses it). Mirrored in scalpPaintMaterial.ts and the Unity AetherStrand/ScalpPaint shader.
  */
-export function paintUnderShade(underShade: number, phi: number, full: number): number {
+export function paintUnderShade(underShade: number, phi: number, full: number, az = Math.PI): number {
   if (underShade <= 0) return 1;
-  return 1 - underShade * (1 - ss((phi - (full - UNDER_SHADE_BAND)) / UNDER_SHADE_BAND));
+  const front = ss((0.95 - Math.abs(az)) / 0.6);
+  const cavity = 1 - ss((phi - (full - UNDER_SHADE_BAND)) / (UNDER_SHADE_BAND + 0.02));
+  return 1 - underShade * (1 - 0.55 * front) * cavity;
 }
 
 /**
@@ -149,20 +154,53 @@ export function paintStreak(az: number, phi: number): number {
   return a + (b - a) * f * f * (3 - 2 * f);
 }
 
+/** Box-filtered coverage of a band |d| < hw through a footprint of half-width r (as bandCoverage in the hair shaders). */
+const bandCov = (d: number, hw: number, r: number) => Math.max(0, Math.min(1, (Math.min(d + r, hw) - Math.max(d - r, -hw)) / (2 * r)));
+
+/** One octave of fibres: lanes `freq` per radian of azimuth, broken along phi into short hairs (rows `stretch` lanes long),
+ *  each hair reaching its own density (stagger), so hairs end at different heights instead of on one contour. fwLane is the
+ *  pixel footprint in lanes; once a lane is under a pixel the octave fades to its mean coverage instead of aliasing. */
+function fibreOctave(az: number, phi: number, dens: number, grain: number, freq: number, stretch: number, stagAmp: number,
+  w0: number, w1: number, d0: number, d1: number, c1: number, k: number[], fwLane: number): number {
+  const x = az * freq, lane = Math.floor(x), f = x - lane;
+  const row = Math.floor(phi * (freq / stretch) + paintHash(lane * k[0] + k[1]) * k[2]);
+  const stag = paintHash(lane * k[3] + row * k[4]);
+  const localD = Math.max(0, Math.min(1, dens + (stag - 0.5) * stagAmp * grain));
+  const hw = w0 + (w1 - w0) * ss((localD - d0) / (d1 - d0));
+  const r = Math.max(0.08, fwLane * 0.5);
+  const fib = r < 0.5 ? bandCov(Math.abs(f - 0.5), hw, r) : 2 * hw;
+  const lanes = fib + (2 * hw - fib) * ss((r - 0.35) / 0.15);
+  return lanes * ss((localD - 0.02) / (c1 - 0.02));
+}
+
 /**
- * Paint coverage (alpha 0..1) for a density and a grain noise value n01 (0..1, per ~1 mm cell). Partial density is a
- * soft gradient mixed with stipple by `grain`, so a hairline or fade blends into the skin instead of ending on a line.
- * Mirrored in scalpPaintMaterial.ts and the Unity AetherStrand/ScalpPaint shader.
+ * Paint coverage (alpha 0..1): a soft density ramp mixed by `grain` with directional short-hair fibres (two octaves,
+ * about 2.4 mm and 0.9 mm apart, stretched along phi, the comb direction), so a hairline or fade reads as hairs growing
+ * down and ending at staggered heights instead of round stipple dots. fwAz = pixel footprint in radians of azimuth
+ * (fwidth, seam-safe), 0 for a point sample. From Neon's issue #7 deliverable. Mirrored in scalpPaintMaterial.ts and the
+ * Unity AetherStrand/ScalpPaint shader.
  */
-export function scalpPaintAlpha(dens: number, grain: number, n01: number): number {
+export function paintFibreAlpha(az: number, phi: number, dens: number, grain: number, stretch: number, fwAz = 0): number {
   if (dens <= 0.002) return 0;
-  if (dens >= 0.999) return 1;
-  const n = 0.5 + (n01 - 0.5) * Math.min(1, grain + 0.2);
-  const e = 0.14;
-  const t = Math.max(0, Math.min(1, (dens - n + e) / (2 * e)));
-  const stip = t * t * (3 - 2 * t);
-  const soft = Math.pow(dens, 0.85);
-  return soft + (stip - soft) * Math.min(1, grain * 0.5);
+  if (dens >= 0.995) return 1;
+  const st = Math.max(2, stretch);
+  const c1 = fibreOctave(az, phi, dens, grain, 260, st, 0.34, 0.14, 0.5, 0.05, 0.85, 0.28, [2.91, 37.3, 4, 3.17, 17.13], fwAz * 260);
+  const c2 = fibreOctave(az, phi, dens, grain, 680, st * 1.25, 0.38, 0.12, 0.48, 0.04, 0.82, 0.24, [4.13, 19.1, 6, 5.71, 23.41], fwAz * 680);
+  const fibres = c1 + (c2 - c1) * 0.45;
+  const base = Math.pow(dens, 0.9);
+  return Math.max(0, Math.min(1, base + (fibres - base) * Math.min(0.85, grain * 0.78)));
+}
+
+/** Broad strand sheen on the paint (Kajiya-Kay style lobe on the downward comb tangent), so a painted fade shares the locks'
+ *  highlight response instead of reading as matte. N, L, V world space, unit length. Mirrored in the paint shaders. */
+export function paintSheen(N: THREE.Vector3, L: THREE.Vector3, V: THREE.Vector3, dens: number): number {
+  // downward tangent: (0,-1,0) projected onto the surface
+  let tx = N.x * N.y, ty = -1 + N.y * N.y, tz = N.z * N.y;
+  const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
+  let hx = L.x + V.x, hy = L.y + V.y, hz = L.z + V.z;
+  const hl = Math.hypot(hx, hy, hz) || 1; hx /= hl; hy /= hl; hz /= hl;
+  const th = Math.max(-1, Math.min(1, tx * hx + ty * hy + tz * hz));
+  return 0.08 * Math.pow(Math.sqrt(Math.max(0, 1 - th * th)), 10) * ss((dens - 0.15) / 0.7);
 }
 
 /**
@@ -198,14 +236,18 @@ export const PAINT_SPEC = 0.8;
  */
 export function applyHairlineLook(p: ScalpPaint, look: HairlineLook = {}): ScalpPaint {
   const s = Math.max(0, Math.min(1, look.softness ?? 0.5));
-  const feather = 0.02 + 0.1 * s;
-  const shift = feather * 0.45; // keep the visual edge (about half density) where the cut line was
+  // 4.5 mm (crisp) to 15.5 mm (very soft): the older 2-12 mm band was narrower than the fibres are long, so the edge read
+  // as a painted line (Neon, issue #7)
+  const feather = 0.045 + 0.11 * s;
+  const shift = feather * 0.42; // keep the visual edge (about half density) where the cut line was
   const out: ScalpPaint = {
     ...p,
     edgePhi: p.edgePhi.map((v, i) => Math.max(p.fullPhi[i], v - shift)),
     fullPhi: p.fullPhi.map((v, i) => Math.max(0, Math.min(v, p.edgePhi[i] - shift) - 0.03 * s)),
     feather: Math.max(p.feather, feather),
-    grain: Math.max(p.grain, 0.3 + 0.3 * s),
+    grain: Math.max(p.grain, 0.35 + 0.35 * s),
+    // fibres combed along phi by default (1 = round dots)
+    grainStretch: Math.max(p.grainStretch ?? 1, 6 + 4 * s),
     irregularity: look.irregularity ?? p.irregularity ?? 0.5,
   };
   if (look.color) out.color = look.color; else delete out.color;
@@ -220,10 +262,11 @@ export function makeScalpPaint(o: { full: (az: number) => number; edge?: (az: nu
     const az = binAzimuth(i, bins);
     const f = o.full(az);
     fullPhi.push(f);
-    edgePhi.push(Math.max(f, o.edge ? o.edge(az) : f + 0.03));
-    edgeDensity.push(o.edgeDensity ? o.edgeDensity(az) : 0.55);
+    // defaults: a soft hairline is under 30% density by its mid line (was 0.55 at f + 0.03 with a 0.035 feather, a cliff)
+    edgePhi.push(Math.max(f, o.edge ? o.edge(az) : f + 0.045));
+    edgeDensity.push(o.edgeDensity ? o.edgeDensity(az) : 0.28);
   }
-  return { bins, fullPhi, edgePhi, edgeDensity, feather: o.feather ?? 0.035, density: o.density ?? 1, grain: o.grain ?? 0.5 };
+  return { bins, fullPhi, edgePhi, edgeDensity, feather: o.feather ?? 0.065, density: o.density ?? 1, grain: o.grain ?? 0.5 };
 }
 
 /**
