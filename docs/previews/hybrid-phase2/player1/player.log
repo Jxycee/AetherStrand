@@ -1,0 +1,37 @@
+Mono path[0] = '<scratch>/hybrid_proof_player/HybridProof_Data/Managed'
+Mono config path = '<scratch>/hybrid_proof_player/MonoBleedingEdge/etc'
+CodeReloadManager initialized
+Input System module state changed to: Initialized.
+[Physics::Module] Initialized fallback backend.
+[Physics::Module] Id: 0xdecafbad
+Initialize engine version: 6000.6.5f1 (3ff58d469c8a)
+[EntityIdStore] init: VM path (explicit commit), pageSize=4096, blockCount=1048576, entitiesPerBlock=256, slots reserved=4294967296 bytes
+[Subsystems] Discovering subsystems at path <scratch>/hybrid_proof_player/HybridProof_Data/UnitySubsystems
+GfxDevice: creating device client; kGfxThreadingModeClientWorkerJobs
+Direct3D:
+    Version:  Direct3D 11.0 [level 11.1]
+    Renderer: NVIDIA GeForce RTX 5070 (ID=0x2f04)
+    Vendor:   NVIDIA
+    VRAM:     11942 MB
+    Driver:   32.0.16.1742
+Begin MonoManager ReloadAssembly
+- Finished resetting the current domain, in  0.013 seconds
+[Physics::Module] Selected backend (deferred post-plugins).
+[Physics::Module] Name: PhysX
+[Physics::Module] Id: 0xf2b8ea05
+[Physics::Module] SDK Version: 4.1.2
+[Physics::Module] Integration Version: 1.0.0
+[Physics::Module] Threading Mode: Multi-Threaded
+<RI> Initializing input.
+Using Windows.Gaming.Input
+UnloadTime: 1.597600 ms
+[AetherStrand] mass conformed to skull: 3764/4006 vertices moved over 0.2 web-mm; largest push out 26.2 web-mm, in 30.9 web-mm
+HYBRIDPROOF start: NVIDIA GeForce RTX 5070 / Direct3D11 / Unity 6000.6.5f1 / URP msaa 4 / FrameTimingManager on
+Attempting to render to a depth only surface with no dummy color attachment
+HYBRIDPROOF RESULT PASS <aetherstrand>/docs/previews/hybrid-phase2/player1/summary.md
+[Physics::Module] Cleanup current backend.
+[Physics::Module] Id: 0xf2b8ea05
+Input System module state changed to: ShutdownInProgress.
+Input Polling Thread exited.
+Input System module state changed to: Shutdown.
+CodeReloadManager destroyed
