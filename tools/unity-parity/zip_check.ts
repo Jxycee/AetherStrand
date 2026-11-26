@@ -15,7 +15,7 @@ const recipe: any = JSON.parse(fs.readFileSync(argv[0], 'utf8'));
 if (at('--mass') >= 0) recipe.builder.hybrid = { ...(recipe.builder.hybrid ?? {}), mass: true };
 if (at('--edge-cards') >= 0) recipe.builder.hybrid = { ...(recipe.builder.hybrid ?? {}), edgeCards: Number(argv[at('--edge-cards') + 1]) };
 const geo = exportGeometry(recipe);
-const files = generatePluginFiles(recipe.shader ?? HAIR_PRESETS[recipe.presetId].shader, recipe.physics ?? HAIR_PRESETS[recipe.presetId].physics, recipe.presetId, 'urp', [], geo);
+const files = generatePluginFiles(recipe.shader ?? (HAIR_PRESETS as any)[recipe.presetId].shader, recipe.physics ?? (HAIR_PRESETS as any)[recipe.presetId].physics, recipe.presetId, 'urp', [], geo);
 const pkg = path.resolve('unity-plugin/com.aetherstrand.sculptedhair');
 let bad = 0, checked = 0;
 for (const f of files) {

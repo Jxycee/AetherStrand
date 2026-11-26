@@ -3186,6 +3186,13 @@ const CANONICAL_TEXTURE_METAS = import.meta.glob(
   { query: '?raw', import: 'default', eager: true }
 ) as Record<string, string>;
 
+// Blender bridge (issue #9): the hybrid importer and its headless check, shipped as-is so the ZIP matches tools/blender/.
+const BLENDER_BRIDGE_SOURCES = import.meta.glob('../../tools/blender/*.{py,md}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
 const CANONICAL_PACKAGE_JSON = import.meta.glob('../../unity-plugin/com.aetherstrand.sculptedhair/package.json', {
   query: '?raw',
   import: 'default',
@@ -3375,5 +3382,16 @@ export function generatePluginFiles(
       description: 'Blender 4.x addon that auto-loads PresetGeometry.json, k-means clusters locks onto ~44 shared Hair_ bone chains, and exports Unity FBX (Linear VCol).',
       content: generateBlenderAddonPy(presetId),
     },
+    ...Object.entries(BLENDER_BRIDGE_SOURCES).map(([key, content]) => {
+      const name = key.split('/').pop() as string;
+      return {
+        path: `AetherStrand_Blender/hybrid/${name}`,
+        name,
+        category: 'blender' as const,
+        language: (name.endsWith('.py') ? 'python' : 'markdown') as PluginFileEntry['language'],
+        description: 'AetherStrand hybrid hair Blender bridge (tools/blender/): imports the .glb from export_glb.ts.',
+        content,
+      };
+    }),
   ], pipeline, presetGeometry);
 }
