@@ -107,6 +107,7 @@ public static class HybridProofTest
         Debug.Log("HYBRIDPROOF scene: baseline " + baseGeo + ", hybrid " + hybGeo + ", paint " + (paint != null ? "yes" : "none") + ", out " + outDir);
 
         PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager GPU times
+        PlayerSettings.runInBackground = true;        // keep playing at full rate when the editor is not the focused window
         AssetDatabase.SaveAssets();
         EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene(), "Assets/Parity/HybridProof.unity");
         EditorApplication.EnterPlaymode();

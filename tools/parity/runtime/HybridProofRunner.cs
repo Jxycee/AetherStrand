@@ -44,7 +44,7 @@ public class HybridProofRunner : MonoBehaviour
     struct Res { public int w, h; public string name; }
     enum Hair { None, Baseline, Hybrid }
 
-    void Start() { StartCoroutine(RunAll()); }
+    void Start() { Application.runInBackground = true; StartCoroutine(RunAll()); } // an unfocused editor otherwise throttles play mode
 
     IEnumerator RunAll()
     {
