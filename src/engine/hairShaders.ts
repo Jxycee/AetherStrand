@@ -286,7 +286,10 @@ const FRAGMENT_SHADER = /* glsl */ `
     #ifdef HAIR_A2C
       // with MSAA the coverage goes out as is: the per-pixel dither below only resolves under temporal AA, and under MSAA
       // it showed as dot clouds at the hairline (Unity rerun 5, close_fadecap_test.png)
-      fadeCovA2C = fadeCov;
+      // A2C only has samples+1 steps (WebGL antialias is 4x on most GPUs), so a smooth fade shows flat bands (Unity rerun 6).
+      // A +-half-step per-pixel offset picks the step above or below: exact on average, single-sample grain at band edges.
+      float fadeA2cIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+      fadeCovA2C = (fadeCov > 0.0 && fadeCov < 1.0) ? clamp(fadeCov + (fadeA2cIgn - 0.5) * 0.25, 0.0, 1.0) : fadeCov;
     #else
       float fadeIgn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
       float fadeWn = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);

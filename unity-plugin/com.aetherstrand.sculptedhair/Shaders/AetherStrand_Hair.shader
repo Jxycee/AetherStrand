@@ -11,6 +11,7 @@ Shader "AetherStrand/SculptedHair_URP"
         [Toggle(_USE_ALPHA_CLIP)] _UseAlphaClip ("Enable Feathered Wispy-Tip Clipping", Float) = 1
         _AlphaClip ("Alpha Cutoff", Range(0.05, 0.85)) = 0.36
         [Toggle(_ALPHA_TO_COVERAGE)] _AlphaToMask ("Alpha To Coverage (needs MSAA; smooth tips without TAA)", Float) = 0
+        _A2CSamples ("MSAA Samples (alpha to coverage dithers between its steps)", Float) = 4
         [Header(Web Light Rig Parity)]
         _UseWebRig ("Use fixed web 3-light rig (parity)", Float) = 0
         _ParityDisplay ("Apply web display transform in shader (ACES exposure 1.16 + sRGB) for A/B tests", Float) = 0
@@ -105,6 +106,7 @@ Shader "AetherStrand/SculptedHair_URP"
             float  _UseAlphaClip;
             float  _AlphaClip;
             float  _DitherStrength;
+            float  _A2CSamples;
             float  _FadeOpacity;
             float  _FadeSoftness;
             float  _FadeReach;
@@ -275,6 +277,11 @@ Shader "AetherStrand/SculptedHair_URP"
             #ifdef _ALPHA_TO_COVERAGE
             float a = saturate(m / max(fwidth(m), 0.0001) + 0.5);
             if (directCov >= 0.0) a = directCov; // strand cards (pixel-filtered) and fade caps (smooth gradient): sent as is
+            // Fade caps: A2C only has samples+1 coverage steps, so the long fade gradient showed as flat bands (rerun 6,
+            // close_fadecap_test.png). A +-half-step per-pixel offset makes each pixel pick the step above or below, so the
+            // average stays exact and the band edges become single-sample grain, which the MSAA resolve averages away.
+            if (vertColor.a > 0.15 && vertColor.a < 0.45 && a > 0.0 && a < 1.0)
+                a = saturate(a + (AetherInterleavedGradientNoise(screenPosXY) - 0.5) / max(_A2CSamples, 1.0));
             if (!soft) { clip(m); a = 1.0; }
             clip(a - 0.001);
             return a;

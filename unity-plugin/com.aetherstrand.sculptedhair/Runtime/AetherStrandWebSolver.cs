@@ -943,7 +943,7 @@ namespace AetherStrand
         unsafe void ResolveInterLock(double hpx, double hpy, double hpz, double hqx, double hqy, double hqz, double hqw,
             double iqx, double iqy, double iqz, double iqw, double marginMeters, bool collisionEnabled, double widthScale)
         {
-            const double WIDTH_FRAC = 0.8, THICK_SCALE = 1.48;
+            const double WIDTH_FRAC = 0.8;
             double thickScaleW = 0.65 + 0.35 * widthScale;
             double RAD_PAD = Math.Min(0.026, 0.02 * Math.Max(1.0, thickScaleW));
             double RAD_PAD_SQ = RAD_PAD * RAD_PAD;
