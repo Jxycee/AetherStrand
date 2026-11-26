@@ -16,16 +16,6 @@ namespace AetherStrand
         public const int RingVerts = 7;
         public const int VertsPerLock = Rings * RingVerts + 1; // legacy (smooth = 1); smoothed locks use vertBase / ringCount
         readonly int[] ringCount, vertBase, lockSm;
-        static readonly double[] _ext = new double[(AetherStrandWebSolver.N + 2) * 3];
-        static double CR(double p0, double p1, double p2, double p3, double f)
-        {
-            double f2 = f * f;
-            return 0.5 * (2 * p1 + (p2 - p0) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f2 + (3 * p1 - p0 - 3 * p2 + p3) * f2 * f);
-        }
-        static double CRD(double p0, double p1, double p2, double p3, double f)
-        {
-            return 0.5 * ((p2 - p0) + 2 * (2 * p0 - 5 * p1 + 4 * p2 - p3) * f + 3 * (3 * p1 - p0 - 3 * p2 + p3) * f * f);
-        }
 
         static readonly float[] PU = { 0.0f, 0.17f, 0.34f, 0.5f, 0.66f, 0.83f, 1.0f };
         static readonly double[] PX = { 0.0, 0.76, 1.0, 0.0, -1.0, -0.76, 0.0 };
@@ -60,6 +50,10 @@ namespace AetherStrand
             this.solver = solver; this.locks = locks;
             int L = locks.Length;
             ringCount = new int[L]; vertBase = new int[L + 1]; lockSm = new int[L];
+            fRootWidth = new double[L]; fScalpRoot = new double[L]; fBaseWidth = new double[L]; fBaseThickness = new double[L]; fSurfaceShine = new double[L];
+            fRoundness = new double[L]; fTipWidth = new double[L]; fTipStart = new double[L]; fRipple = new double[L]; fRippleFreq = new double[L];
+            fRootNormal = new double[L * 3]; fShadeDir = new double[L * 3];
+            fIsBaseShell = new byte[L]; fLockNormal = new byte[L]; fIsFadeCap = new byte[L]; fHasShade = new byte[L];
             int triCount = 0;
             for (int s = 0; s < L; s++)
             {
@@ -131,229 +125,54 @@ namespace AetherStrand
         public Vector3 fitScale = Vector3.one;
         public Vector3 fitOffset = Vector3.zero;
 
-        public void Update(double hpx, double hpy, double hpz, double hqx, double hqy, double hqz, double hqw, double widthScale, float unitScale)
+        // Per-lock data flattened into plain arrays for AetherStrandMeshKernel (refreshed every Update, so edits to the
+        // LockData objects still take effect as before; a few microseconds for hundreds of locks).
+        readonly double[] fRootWidth, fScalpRoot, fBaseWidth, fBaseThickness, fSurfaceShine, fRoundness, fTipWidth, fTipStart, fRipple, fRippleFreq, fRootNormal, fShadeDir;
+        readonly byte[] fIsBaseShell, fLockNormal, fIsFadeCap, fHasShade;
+
+        void FlattenLocks()
         {
-            // rotate by the conjugate of the head quaternion: web world offset -> rest-head-local (web space)
-            double cqx = -hqx, cqy = -hqy, cqz = -hqz, cqw = hqw;
-            bool fit = useFit;
-            double fsx = fitScale.x, fsy = fitScale.y, fsz = fitScale.z;
-            Vector3 MapPoint(double x, double y, double z)
-            {
-                if (!fit) return new Vector3((float)(-x * unitScale), (float)(y * unitScale), (float)(z * unitScale));
-                double ax = x - hpx, ay = y - hpy, az = z - hpz;
-                double tx2 = 2 * (cqy * az - cqz * ay), ty2 = 2 * (cqz * ax - cqx * az), tz2 = 2 * (cqx * ay - cqy * ax);
-                double lx = ax + cqw * tx2 + (cqy * tz2 - cqz * ty2), ly = ay + cqw * ty2 + (cqz * tx2 - cqx * tz2), lz = az + cqw * tz2 + (cqx * ty2 - cqy * tx2);
-                return new Vector3((float)(-lx * fsx + fitOffset.x), (float)(ly * fsy + fitOffset.y), (float)(lz * fsz + fitOffset.z));
-            }
-            // kind: 0 = normal (inverse-transpose of the fit), 1 = tangent/direction
-            Vector3 MapDir(double x, double y, double z, int kind)
-            {
-                if (!fit) return new Vector3((float)-x, (float)y, (float)z);
-                double tx2 = 2 * (cqy * z - cqz * y), ty2 = 2 * (cqz * x - cqx * z), tz2 = 2 * (cqx * y - cqy * x);
-                double lx = x + cqw * tx2 + (cqy * tz2 - cqz * ty2), ly = y + cqw * ty2 + (cqz * tx2 - cqx * tz2), lz = z + cqw * tz2 + (cqx * ty2 - cqy * tx2);
-                double dx = -lx, dy = ly, dz = lz;
-                if (kind == 0) { dx /= fsx; dy /= fsy; dz /= fsz; } else { dx *= fsx; dy *= fsy; dz *= fsz; }
-                double l = System.Math.Sqrt(dx * dx + dy * dy + dz * dz); if (l < 1e-12) l = 1;
-                return new Vector3((float)(dx / l), (float)(dy / l), (float)(dz / l));
-            }
-            double[] X = solver.PosX, Y = solver.PosY, Z = solver.PosZ;
-            // head centre in world = HEAD_CENTER_LOCAL (0,0.425,-0.01) rotated + head pos (three applyQuaternion)
-            double hcx, hcy, hcz;
-            {
-                double lx = 0, ly = 0.425, lz = -0.01;
-                double ix = hqw * lx + hqy * lz - hqz * ly;
-                double iy = hqw * ly + hqz * lx - hqx * lz;
-                double iz = hqw * lz + hqx * ly - hqy * lx;
-                double iw = -hqx * lx - hqy * ly - hqz * lz;
-                hcx = ix * hqw + iw * -hqx + iy * -hqz - iz * -hqy + hpx;
-                hcy = iy * hqw + iw * -hqy + iz * -hqx - ix * -hqz + hpy;
-                hcz = iz * hqw + iw * -hqz + ix * -hqy - iy * -hqx + hpz;
-            }
-            double x2 = hqx + hqx, y2 = hqy + hqy, z2 = hqz + hqz;
-            double xx = hqx * x2, xy = hqx * y2, xz = hqx * z2, yy = hqy * y2, yz = hqy * z2, zz = hqz * z2, wx = hqw * x2, wy = hqw * y2, wz = hqw * z2;
-            double m00 = 1 - (yy + zz), m01 = xy - wz, m02 = xz + wy;
-            double m10 = xy + wz, m11 = 1 - (xx + zz), m12 = yz - wx;
-            double m20 = xz - wy, m21 = yz + wx, m22 = 1 - (xx + yy);
-            double us = unitScale;
-            int vIdx = 0;
             for (int s = 0; s < locks.Length; s++)
             {
                 var lk = locks[s];
-                int b = s * AetherStrandWebSolver.N;
-                bool isBase = lk.isBaseShell, lockNormal = lk.lockNormal;
-                double rootMinW = !double.IsNaN(lk.rootWidth) ? lk.rootWidth : (lk.scalpRoot >= 0.5 ? 0.36 : 0.08);
-                double effW = isBase ? 1.0 : widthScale;
-                double effT = isBase ? 1.0 : 0.9 * (0.65 + 0.35 * effW);
-                double baseHalfW = lk.baseWidth * 0.5 * effW;
-                double baseHalfT = lk.baseThickness * 0.5 * effT;
+                fRootWidth[s] = lk.rootWidth; fScalpRoot[s] = lk.scalpRoot; fBaseWidth[s] = lk.baseWidth; fBaseThickness[s] = lk.baseThickness;
+                fSurfaceShine[s] = lk.surfaceShine; fRoundness[s] = lk.roundness; fTipWidth[s] = lk.tipWidth; fTipStart[s] = lk.tipStart;
+                fRipple[s] = lk.ripple; fRippleFreq[s] = lk.rippleFreq;
+                fRootNormal[s * 3] = lk.rootNormal[0]; fRootNormal[s * 3 + 1] = lk.rootNormal[1]; fRootNormal[s * 3 + 2] = lk.rootNormal[2];
+                bool hs = lk.shadeDir != null;
+                fHasShade[s] = (byte)(hs ? 1 : 0);
+                if (hs) { fShadeDir[s * 3] = lk.shadeDir[0]; fShadeDir[s * 3 + 1] = lk.shadeDir[1]; fShadeDir[s * 3 + 2] = lk.shadeDir[2]; }
+                fIsBaseShell[s] = (byte)(lk.isBaseShell ? 1 : 0); fLockNormal[s] = (byte)(lk.lockNormal ? 1 : 0); fIsFadeCap[s] = (byte)(lk.isFadeCap ? 1 : 0);
+            }
+        }
 
-                double odx = m00 * lk.rootNormal[0] + m01 * lk.rootNormal[1] + m02 * lk.rootNormal[2];
-                double ody = m10 * lk.rootNormal[0] + m11 * lk.rootNormal[1] + m12 * lk.rootNormal[2];
-                double odz = m20 * lk.rootNormal[0] + m21 * lk.rootNormal[1] + m22 * lk.rootNormal[2];
-                double odl = System.Math.Sqrt(odx * odx + ody * ody + odz * odz);
-                double odInv = 1.0 / (odl == 0 ? 1.0 : odl);
-                odx *= odInv; ody *= odInv; odz *= odInv;
-                double ox = 0, oy = 1, oz = 0;
-                // the lock's overall direction (root to tip): with surfaceShine the shading tangent leans to it, so a lock that
-                // bends keeps one highlight along its length instead of going dark where it bends away from the light (as the web)
-                double chx = 0, chy = 0, chz = 0;
-                if (lk.surfaceShine > 0 && lk.shadeDir != null)
+        public unsafe void Update(double hpx, double hpy, double hpz, double hqx, double hqy, double hqz, double hqw, double widthScale, float unitScale)
+        {
+            var mp = new AetherStrandMeshKernel.Params
+            {
+                hpx = hpx, hpy = hpy, hpz = hpz, hqx = hqx, hqy = hqy, hqz = hqz, hqw = hqw, widthScale = widthScale, unitScale = unitScale,
+                fit = useFit ? 1 : 0, lockCount = locks.Length,
+                fsx = fitScale.x, fsy = fitScale.y, fsz = fitScale.z, fox = fitOffset.x, foy = fitOffset.y, foz = fitOffset.z,
+            };
+            FlattenLocks();
+            fixed (double* X = solver.PosX, Y = solver.PosY, Z = solver.PosZ)
+            fixed (double* rw = fRootWidth, sr = fScalpRoot, bw = fBaseWidth, bt = fBaseThickness, ss = fSurfaceShine, rd = fRoundness, tw = fTipWidth, tst = fTipStart, rp = fRipple, rf = fRippleFreq, rn = fRootNormal, sd = fShadeDir)
+            fixed (byte* ib = fIsBaseShell, ln = fLockNormal, fc = fIsFadeCap, hs = fHasShade)
+            fixed (int* lsm = lockSm, rc = ringCount)
+            fixed (double* t0 = RootSin, t1 = TipTaper, t2 = BaseTipTaper, t3 = TipFactor, t4 = ThickPow, px = PX, py = PY, pnx = PNX, pny = PNY)
+            fixed (Vector3* ov = verts, on = norms)
+            fixed (Vector4* ot = tans)
+            {
+                var bf = new AetherStrandMeshKernel.Buffers
                 {
-                    // (a shadeDir from the builder: the comb direction there, shared by neighbouring locks)
-                    double[] sd = lk.shadeDir;
-                    chx = m00 * sd[0] + m01 * sd[1] + m02 * sd[2]; chy = m10 * sd[0] + m11 * sd[1] + m12 * sd[2]; chz = m20 * sd[0] + m21 * sd[1] + m22 * sd[2];
-                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
-                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
-                }
-                else if (lk.surfaceShine > 0)
-                {
-                    int tl0 = b + AetherStrandWebSolver.N - 1;
-                    chx = X[tl0] - X[b]; chy = Y[tl0] - Y[b]; chz = Z[tl0] - Z[b];
-                    double cl = System.Math.Sqrt(chx * chx + chy * chy + chz * chz);
-                    if (cl > 1e-5) { chx /= cl; chy /= cl; chz /= cl; } else { chx = chy = chz = 0; }
-                }
-                int sm = lockSm[s], rings = ringCount[s];
-                double round = lk.roundness;
-                if (sm > 1)
-                {
-                    int n = AetherStrandWebSolver.N;
-                    for (int q = 0; q < n; q++) { _ext[(q + 1) * 3] = X[b + q]; _ext[(q + 1) * 3 + 1] = Y[b + q]; _ext[(q + 1) * 3 + 2] = Z[b + q]; }
-                    for (int a = 0; a < 3; a++) { _ext[a] = 2 * _ext[3 + a] - _ext[6 + a]; _ext[(n + 1) * 3 + a] = 2 * _ext[n * 3 + a] - _ext[(n - 1) * 3 + a]; }
-                }
-
-                for (int m = 0; m < rings; m++)
-                {
-                    int k = sm == 1 ? m : m / sm;
-                    int i = b + k;
-                    double px0, py0, pz0;
-                    double tx = 0, ty = 0, tz = 0;
-                    double sRs = 0, sTT = 0, sBT = 0, sTF = 0, sTP = 0;
-                    if (sm > 1)
-                    {
-                        double fu = (m - k * sm) / (double)sm; int e = k * 3;
-                        px0 = CR(_ext[e], _ext[e + 3], _ext[e + 6], _ext[e + 9], fu);
-                        py0 = CR(_ext[e + 1], _ext[e + 4], _ext[e + 7], _ext[e + 10], fu);
-                        pz0 = CR(_ext[e + 2], _ext[e + 5], _ext[e + 8], _ext[e + 11], fu);
-                        tx = CRD(_ext[e], _ext[e + 3], _ext[e + 6], _ext[e + 9], fu);
-                        ty = CRD(_ext[e + 1], _ext[e + 4], _ext[e + 7], _ext[e + 10], fu);
-                        tz = CRD(_ext[e + 2], _ext[e + 5], _ext[e + 8], _ext[e + 11], fu);
-                        double tt = (m / (double)sm) / (AetherStrandWebSolver.N - 1);
-                        sTF = tt;
-                        sRs = System.Math.Sin(System.Math.Min(1.0, tt * 4.2) * System.Math.PI * 0.5);
-                        sTT = System.Math.Max(0.06, tt < 0.44 ? 1.0 - tt * 0.14 : System.Math.Pow((1.0 - tt) / 0.56, 0.94) * 0.938);
-                        sBT = System.Math.Max(0.04, tt < 0.42 ? 1.0 - tt * 0.16 : System.Math.Pow((1.0 - tt) / 0.58, 1.12) * 0.933);
-                        sTP = System.Math.Pow(System.Math.Max(0.04, 1.0 - tt), 0.86);
-                    }
-                    else { px0 = X[i]; py0 = Y[i]; pz0 = Z[i]; }
-                    if (sm > 1) { }
-                    else if (k == 0) { tx = X[i + 1] - px0; ty = Y[i + 1] - py0; tz = Z[i + 1] - pz0; }
-                    else { tx = X[i + 1] - X[i - 1]; ty = Y[i + 1] - Y[i - 1]; tz = Z[i + 1] - Z[i - 1]; }
-                    double tl = System.Math.Sqrt(tx * tx + ty * ty + tz * tz);
-                    double tInv = 1.0 / (tl == 0 ? 1.0 : tl);
-                    tx *= tInv; ty *= tInv; tz *= tInv;
-
-                    double hnx = px0 - hcx, hny = py0 - hcy, hnz = pz0 - hcz;
-                    double hl = System.Math.Sqrt(hnx * hnx + hny * hny + hnz * hnz);
-                    double hnInv = 1.0 / (hl == 0 ? 1.0 : hl);
-                    hnx *= hnInv; hny *= hnInv; hnz *= hnInv;
-                    // shading tangent (surfaceShine): the lock's direction along the scalp, its rise off the skin removed
-                    double stx = tx, sty = ty, stz = tz;
-                    if (lk.surfaceShine > 0)
-                    {
-                        if (chx != 0 || chy != 0 || chz != 0) { stx += (chx - stx) * lk.surfaceShine; sty += (chy - sty) * lk.surfaceShine; stz += (chz - stz) * lk.surfaceShine; }
-                        double tn = (stx * hnx + sty * hny + stz * hnz) * lk.surfaceShine;
-                        stx -= hnx * tn; sty -= hny * tn; stz -= hnz * tn;
-                        double sl = System.Math.Sqrt(stx * stx + sty * sty + stz * stz);
-                        if (sl > 1e-4) { stx /= sl; sty /= sl; stz /= sl; } else { stx = tx; sty = ty; stz = tz; }
-                    }
-
-                    double sx, sy, sz;
-                    if (!lockNormal)
-                    {
-                        sx = ty * hnz - tz * hny; sy = tz * hnx - tx * hnz; sz = tx * hny - ty * hnx;
-                        if (sx * sx + sy * sy + sz * sz >= 0.0025) { odx = hnx; ody = hny; odz = hnz; }
-                        else
-                        {
-                            odx += (hnx - odx) * 0.5; ody += (hny - ody) * 0.5; odz += (hnz - odz) * 0.5;
-                            double ol = System.Math.Sqrt(odx * odx + ody * ody + odz * odz);
-                            double oInv = 1.0 / (ol == 0 ? 1.0 : ol);
-                            odx *= oInv; ody *= oInv; odz *= oInv;
-                            sx = ty * odz - tz * ody; sy = tz * odx - tx * odz; sz = tx * ody - ty * odx;
-                        }
-                    }
-                    else { sx = ty * odz - tz * ody; sy = tz * odx - tx * odz; sz = tx * ody - ty * odx; }
-
-                    double sLenSq = sx * sx + sy * sy + sz * sz;
-                    if (sLenSq < 0.0001) { sx = 1; sy = 0; sz = 0; }
-                    else { double sInv = 1.0 / System.Math.Sqrt(sLenSq); sx *= sInv; sy *= sInv; sz *= sInv; }
-
-                    ox = sy * tz - sz * ty; oy = sz * tx - sx * tz; oz = sx * ty - sy * tx;
-
-                    double rSin = sm > 1 ? sRs : RootSin[k];
-                    double rootTuck = isBase ? 0.88 + 0.12 * rSin : rootMinW + (1.0 - rootMinW) * rSin;
-                    double rootThickTuck = isBase ? 1.0 : 0.2 + 0.8 * rSin;
-                    bool isFade = lk.isFadeCap;
-                    bool customTip = !isFade && (lk.tipWidth > 0 || !double.IsNaN(lk.tipStart) || lk.ripple > 0);
-                    double ctW = 1, ctT = 1;
-                    if (customTip) TipShape(sm > 1 ? sTF : TipFactor[k], lk.tipStart, lk.tipWidth, lk.ripple, lk.rippleFreq, out ctW, out ctT);
-                    double tipTaper = isFade ? 1.0 : (customTip ? ctW : (isBase ? (sm > 1 ? sBT : BaseTipTaper[k]) : (sm > 1 ? sTT : TipTaper[k])));
-                    double halfW = baseHalfW * rootTuck * tipTaper;
-                    double halfT = isFade ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? sTF : TipFactor[k]) * 0.65) : baseHalfT * rootThickTuck * (customTip ? ctT : (sm > 1 ? sTP : ThickPow[k]));
-                    if (round > 0 && !isFade && !isBase) halfT += (halfW * 0.9 * rootThickTuck - halfT) * round;
-
-                    // The output mapping is affine (MapPoint) or linear then normalised (MapDir), so it is applied once per ring to
-                    // the centre and the two cross-section axes, and each ring vertex is a weighted sum of those (same result as
-                    // mapping every vertex, about a quarter of the work: this loop runs for every vertex of every lock every frame).
-                    Vector3 c0 = MapPoint(px0, py0, pz0);
-                    double cx0 = c0.x, cy0 = c0.y, cz0 = c0.z;
-                    double psx, psy, psz, pox, poy, poz; // position axes, mapped (linear part of MapPoint)
-                    double nsx, nsy, nsz, nox, noy, noz; // normal axes, mapped (linear part of MapDir kind 0, before normalising)
-                    if (!fit)
-                    {
-                        psx = -sx * us; psy = sy * us; psz = sz * us; pox = -ox * us; poy = oy * us; poz = oz * us;
-                        nsx = -sx; nsy = sy; nsz = sz; nox = -ox; noy = oy; noz = oz;
-                    }
-                    else
-                    {
-                        RotConj(sx, sy, sz, cqx, cqy, cqz, cqw, out double lx, out double ly, out double lz);
-                        psx = -lx * fsx; psy = ly * fsy; psz = lz * fsz; nsx = -lx / fsx; nsy = ly / fsy; nsz = lz / fsz;
-                        RotConj(ox, oy, oz, cqx, cqy, cqz, cqw, out lx, out ly, out lz);
-                        pox = -lx * fsx; poy = ly * fsy; poz = lz * fsz; nox = -lx / fsx; noy = ly / fsy; noz = lz / fsz;
-                    }
-                    Vector3 tvR = MapDir(stx, sty, stz, 1);
-                    Vector4 tanR = new Vector4(tvR.x, tvR.y, tvR.z, 1f);
-                    for (int r = 0; r < RingVerts; r++)
-                    {
-                        double a = PX[r] * halfW, c = PY[r] * halfT;
-                        verts[vIdx] = new Vector3((float)(cx0 + psx * a + pox * c), (float)(cy0 + psy * a + poy * c), (float)(cz0 + psz * a + poz * c));
-                        double nx = nsx * PNX[r] + nox * PNY[r], ny = nsy * PNX[r] + noy * PNY[r], nz = nsz * PNX[r] + noz * PNY[r];
-                        if (fit) { double l = System.Math.Sqrt(nx * nx + ny * ny + nz * nz); if (l < 1e-12) l = 1; nx /= l; ny /= l; nz /= l; }
-                        norms[vIdx] = new Vector3((float)nx, (float)ny, (float)nz);
-                        tans[vIdx] = tanR;
-                        vIdx++;
-                    }
-                }
-
-                int ti = b + AetherStrandWebSolver.N - 1;
-                double ttx = X[ti] - X[ti - 1], tty = Y[ti] - Y[ti - 1], ttz = Z[ti] - Z[ti - 1];
-                double tl2 = System.Math.Sqrt(ttx * ttx + tty * tty + ttz * ttz);
-                double ttInv = 1.0 / (tl2 == 0 ? 1.0 : tl2);
-                ttx *= ttInv; tty *= ttInv; ttz *= ttInv;
-                if (lk.surfaceShine > 0)
-                {
-                    double thx = X[ti] - hcx, thy = Y[ti] - hcy, thz = Z[ti] - hcz;
-                    double thl = System.Math.Sqrt(thx * thx + thy * thy + thz * thz);
-                    if (thl > 0) { thx /= thl; thy /= thl; thz /= thl; }
-                    if (chx != 0 || chy != 0 || chz != 0) { ttx += (chx - ttx) * lk.surfaceShine; tty += (chy - tty) * lk.surfaceShine; ttz += (chz - ttz) * lk.surfaceShine; }
-                    double tn = (ttx * thx + tty * thy + ttz * thz) * lk.surfaceShine;
-                    double fx = ttx - thx * tn, fy = tty - thy * tn, fz = ttz - thz * tn;
-                    double fl = System.Math.Sqrt(fx * fx + fy * fy + fz * fz);
-                    if (fl > 1e-4) { ttx = fx / fl; tty = fy / fl; ttz = fz / fl; }
-                }
-                verts[vIdx] = MapPoint(X[ti], Y[ti], Z[ti]);
-                norms[vIdx] = MapDir(ox, oy, oz, 0);
-                { Vector3 tv2 = MapDir(ttx, tty, ttz, 1); tans[vIdx] = new Vector4(tv2.x, tv2.y, tv2.z, 1f); }
-                vIdx++;
+                    X = X, Y = Y, Z = Z,
+                    rootWidth = rw, scalpRoot = sr, baseWidth = bw, baseThickness = bt, surfaceShine = ss, roundness = rd, tipWidth = tw, tipStart = tst, ripple = rp, rippleFreq = rf, rootNormal = rn, shadeDir = sd,
+                    isBaseShell = ib, lockNormal = ln, isFadeCap = fc, hasShade = hs,
+                    lockSm = lsm, ringCount = rc,
+                    RootSin = t0, TipTaper = t1, BaseTipTaper = t2, TipFactor = t3, ThickPow = t4, PX = px, PY = py, PNX = pnx, PNY = pny,
+                    verts = (float*)ov, norms = (float*)on, tans = (float*)ot,
+                };
+                AetherStrandMeshKernel.Build(ref mp, ref bf);
             }
             mesh.SetVertices(verts);
             mesh.SetNormals(norms);
@@ -361,43 +180,7 @@ namespace AetherStrand
             mesh.RecalculateBounds();
         }
 
-        /// <summary>v rotated by the quaternion (qx, qy, qz, qw) (the conjugate head rotation in Update; same formula as MapPoint).</summary>
-        static void RotConj(double x, double y, double z, double qx, double qy, double qz, double qw, out double lx, out double ly, out double lz)
-        {
-            double tx2 = 2 * (qy * z - qz * y), ty2 = 2 * (qz * x - qx * z), tz2 = 2 * (qx * y - qy * x);
-            lx = x + qw * tx2 + (qy * tz2 - qz * ty2); ly = y + qw * ty2 + (qz * tx2 - qx * tz2); lz = z + qw * tz2 + (qx * ty2 - qy * tx2);
-        }
 
-        /// <summary>Per-lock tip shape, mirror of computeTipShape in hairPhysics.ts (mesh only).</summary>
-        static void TipShape(double t, double tipStart, double tipWidth, double ripple, double rippleFreq, out double w, out double th)
-        {
-            double s = double.IsNaN(tipStart) ? 0.44 : System.Math.Min(0.97, System.Math.Max(0.2, tipStart));
-            double tw = System.Math.Min(0.9, System.Math.Max(0.0, tipWidth));
-            t = System.Math.Min(1.0, t * (AetherStrandWebSolver.N - 1) / (double)(AetherStrandWebSolver.N - 2)); // last ring = node N-2; tip vertex closes at N-1
-            double u = t < s ? t * 0.44 / s : 0.44 + ((t - s) / (1 - s)) * 0.56;
-            w = System.Math.Max(0.06, u < 0.44 ? 1.0 - u * 0.14 : System.Math.Pow((1.0 - u) / 0.56, 0.94) * 0.938);
-            th = System.Math.Pow(System.Math.Max(0.04, 1.0 - u), 0.86);
-            if (tw > 0)
-            {
-                w = tw + (1 - tw) * w;
-                th = tw + (1 - tw) * th;
-                const double cap = 0.07;
-                if (t > 1 - cap)
-                {
-                    double c = (t - (1 - cap)) / cap;
-                    double f = 0.55 + 0.45 * System.Math.Sqrt(System.Math.Max(0.0, 1 - c * c));
-                    w *= f; th *= f;
-                }
-            }
-            double rp = System.Math.Min(0.45, System.Math.Max(0.0, ripple));
-            if (rp > 0)
-            {
-                double fq = System.Math.Max(1.0, rippleFreq);
-                double rf = System.Math.Min(1.0, System.Math.Max(0.0, (t - 0.04) / 0.11));
-                double m = 1 - rp * 0.5 * (1 - System.Math.Cos(2 * System.Math.PI * fq * t)) * rf * rf * (3 - 2 * rf);
-                w *= m; th *= m;
-            }
-        }
 
         /// <summary>Copy of the last vertex positions (hair space), for tests.</summary>
         public Vector3[] Vertices => verts;
