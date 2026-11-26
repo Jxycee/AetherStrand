@@ -236,19 +236,41 @@ const FRAGMENT_SHADER = /* glsl */ `
   // turned back into the lateral position across the lock, which puts each hair on both faces at the same place. 3 hairs
   // per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
   // offset, sway, taper and length from the lock seed.
-  float strandCardAlpha(float u, float t, float seed) {
-    float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? mix(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? mix(1.0, 0.0, (u - 0.34) / 0.16)
-            : u < 0.66 ? mix(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? mix(-1.0, -0.76, (u - 0.66) / 0.17) : mix(-0.76, 0.0, (u - 0.83) / 0.17);
+  float strandLaneX(float u) {
+    return u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? mix(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? mix(1.0, 0.0, (u - 0.34) / 0.16)
+         : u < 0.66 ? mix(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? mix(-1.0, -0.76, (u - 0.66) / 0.17) : mix(-0.76, 0.0, (u - 0.83) / 0.17);
+  }
+
+  // Box-filtered coverage of a band |d| < hw seen through a pixel footprint of half-width r (1D overlap / footprint).
+  // r is at least the authored soft edge, so a hair magnified on screen keeps its soft edge, a hair near pixel size gets
+  // a one-pixel ramp, and a hair thinner than a pixel keeps its area (fainter) instead of breaking into speckle.
+  float bandCoverage(float d, float hw, float r) {
+    return clamp((min(d + r, hw) - max(d - r, -hw)) / (2.0 * r), 0.0, 1.0);
+  }
+
+  // fwSn = fwidth of the lane coordinate sn and fwT = fwidth(t), both taken by the caller before any branch
+  // (fwidth of f would jump at the cell seams, and derivatives inside a per-card branch are undefined).
+  float strandCardAlpha(float u, float t, float seed, float fwSn, float fwT) {
+    float x = strandLaneX(u);
     float sn = (x * 0.5 + 0.5) * 3.0;
     float cell = min(floor(sn), 2.0);
     float f = sn - cell;
     float h1 = fract(sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
     float h2 = fract(sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
     float len = 0.7 + 0.3 * h2;
-    if (t > len) return 0.0;
     float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
     float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
-    return 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+    // authored profile: solid to 0.6w, gone at w, so half-width 0.8w with a 0.2w soft edge
+    float r = max(0.2 * w, 0.5 * fwSn);
+    float lenCov = clamp((len - t) / max(fwT, 1e-5) + 0.5, 0.0, 1.0);
+    return bandCoverage(abs(f - c), 0.8 * w, r) * lenCov;
+  }
+
+  // Alpha-map mip level, used to keep alpha-tested coverage as the map minifies (Golus 2017, "Anti-aliased Alpha Test").
+  float alphaMipLevel(vec2 uv) {
+    vec2 px = uv * vec2(textureSize(uAlphaMap, 0));
+    vec2 dx = dFdx(px), dy = dFdy(px);
+    return max(0.0, 0.5 * log2(max(dot(dx, dx), dot(dy, dy))));
   }
 
   void main() {
@@ -268,20 +290,35 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Fine realistic multi-filament UVs scaled for slender sculpted 3D locks
     vec2 sampleUv = vec2(vUv.x * 0.92 + vStrandSeed * 3.13, t);
 
+    // Coverage inputs, all taken before any branch so the derivatives are defined.
+    float laneFw = fwidth((strandLaneX(vUv.x) * 0.5 + 0.5) * 3.0);
+    float tFw = fwidth(t);
+    float tipTex = texture2D(uAlphaMap, sampleUv).r * (1.0 + alphaMipLevel(sampleUv) * 0.25);
+    float tipEdgeDist = min(abs(vUv.x - 0.34), abs(vUv.x - 0.66));
+    float tipLateralFray = smoothstep(0.0, 0.075, tipEdgeDist);
+    float tipRamp = smoothstep(0.58, 0.98, t);
+    float tipAlpha = tipTex * mix(1.0, 0.44 + 0.56 * tipLateralFray, tipRamp);
+    float tipAlphaFw = fwidth(tipAlpha);
+
     // Feathered Multi-Filament Tip Cutout:
     // Inner foundation shell (vCardMask < 0.5) stays 100% solid; outer locks stay cohesive
     // across root->mid-body and dissolve cleanly into fine individual hair wisps across the outer 42% tip!
     // Strand card (hybrid fine strands, mask 0.75): a few separate hairs along the whole length (strandCardAlpha)
+    // With MSAA (HAIR_A2C) the coverage goes out as alpha-to-coverage; without it, the same 0.36 cut as before.
+    float hairCov = 1.0;
     if (vCardMask > 0.5 && vCardMask < 0.9) {
-      if (strandCardAlpha(vUv.x, t, vStrandSeed) < 0.36) discard;
+      hairCov = strandCardAlpha(vUv.x, t, vStrandSeed, laneFw, tFw);
+    #ifndef HAIR_A2C
+      hairCov = hairCov < 0.36 ? 0.0 : 1.0;
+    #endif
     } else if (vCardMask > 0.5 && t > 0.58) {
-      float strandAlpha = texture2D(uAlphaMap, sampleUv).r;
-      float edgeDist = min(abs(vUv.x - 0.34), abs(vUv.x - 0.66));
-      float lateralFray = smoothstep(0.0, 0.075, edgeDist);
-      float tipRamp = smoothstep(0.58, 0.98, t);
-      float combinedAlpha = strandAlpha * mix(1.0, 0.44 + 0.56 * lateralFray, tipRamp);
-      if (combinedAlpha < 0.36) discard;
+    #ifdef HAIR_A2C
+      hairCov = clamp((tipAlpha - 0.36) / max(tipAlphaFw, 1e-4) + 0.5, 0.0, 1.0);
+    #else
+      hairCov = tipAlpha < 0.36 ? 0.0 : 1.0;
+    #endif
     }
+    if (hairCov <= 0.0) discard;
 
     vec3 lockN = normalize(vWorldNormal) * (gl_FrontFacing ? 1.0 : -1.0);
     vec3 headN = normalize(vWorldHeadNormal);
@@ -473,7 +510,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     vec3 finalColor = diffuse + specular + rimScatter;
 
-    gl_FragColor = vec4(finalColor, 1.0);
+    gl_FragColor = vec4(finalColor, hairCov);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -483,7 +520,9 @@ export function createHairShaderMaterial(
   textures: HairTexturePack,
   config: ShaderConfig,
   lightingId: LightingPresetId,
-  debugMode: VisionDebugMode = 'shaded'
+  debugMode: VisionDebugMode = 'shaded',
+  /** True when the canvas has MSAA: card and tip coverage then go out as alpha-to-coverage instead of a hard cut. */
+  alphaToCoverage = false
 ): THREE.ShaderMaterial {
   const rig = LIGHTING_RIGS[lightingId];
 
@@ -493,6 +532,8 @@ export function createHairShaderMaterial(
     side: THREE.DoubleSide,
     transparent: false,
     depthWrite: true,
+    alphaToCoverage,
+    defines: alphaToCoverage ? { HAIR_A2C: 1 } : {},
     uniforms: {
       uGrooveAoMap: { value: textures.grooveAoTexture },
       uFlowIdMap: { value: textures.flowIdTexture },

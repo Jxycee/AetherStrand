@@ -76,6 +76,11 @@ const look = arg('--look', 'game') === 'legacy' ? 'legacy' : 'game';
 // --debug, --shell-overlay, --shell-gaps), since those count pixels at the base size.
 const measuring = ['--ref', '--debug', '--shell-overlay', '--shell-gaps'].some((k) => args.includes(k));
 const AA = Math.max(1, Math.round(Number(arg('--aa', measuring ? '1' : '3'))));
+// rank of each supersample inside its display pixel, for the alpha-to-coverage mirror (a scrambled order, so a partial
+// coverage lights scattered samples, as a hardware A2C mask does, rather than a row)
+const A2C_RANK: number[] = AA === 2 ? [0, 2, 3, 1] : AA === 3 ? [0, 7, 3, 6, 5, 2, 4, 1, 8]
+  : AA === 4 ? [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5] // ordered (Bayer) dither tables
+  : Array.from({ length: AA * AA }, (_, i) => (i * 7919) % (AA * AA)); // AA*AA coprime to 7919 for any AA this tool runs
 if (AA > 1 && measuring) throw new Error('--aa > 1 cannot be combined with --ref, --debug or the shell overlays (they measure at the base size)');
 // hair shading: by default every hair pixel is shaded by hairShadingModel.ts (the same maths as the viewport and Unity
 // shaders) with the strand maps the app uses. --vertex-shade: the old per-vertex approximation (faster).
@@ -653,6 +658,11 @@ function renderView(vi: number) {
     if (Math.abs(area) < 1e-9) return;
     // which side faces the viewer (as gl_FrontFacing: the geometric winding)
     const front = area < 0;
+    // screen derivatives of u and t per DISPLAY pixel (dFdx / dFdy in the shaders; the triangle is affine in screen space)
+    const w0x = (p1[1] - p2[1]) / area, w0y = (p2[0] - p1[0]) / area, w1x = (p2[1] - p0[1]) / area, w1y = (p0[0] - p2[0]) / area;
+    const du0 = uv[a * 2] - uv[c * 2], du1 = uv[b * 2] - uv[c * 2], dt0 = uv[a * 2 + 1] - uv[c * 2 + 1], dt1 = uv[b * 2 + 1] - uv[c * 2 + 1];
+    pin.dudx = (w0x * du0 + w1x * du1) * AA; pin.dudy = (w0y * du0 + w1y * du1) * AA;
+    pin.dtdx = (w0x * dt0 + w1x * dt1) * AA; pin.dtdy = (w0y * dt0 + w1y * dt1) * AA;
     for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
       const px = x + 0.5, py = y + 0.5;
       const w0 = ((p1[0] - px) * (p2[1] - py) - (p2[0] - px) * (p1[1] - py)) / area;
@@ -675,6 +685,8 @@ function renderView(vi: number) {
       void front;
       lerp3(headNA, a, b, c, w0, w1, w2, pin.headN).normalize();
       lerp3(tng, a, b, c, w0, w1, w2, pin.T).normalize();
+      // MSAA + alpha-to-coverage mirror: each supersample of a display pixel takes its own coverage threshold
+      if (AA > 1) pin.covThr = (A2C_RANK[(y % AA) * AA + (x % AA)] + 0.5) / (AA * AA);
       // fade caps: the shader's screen dither (interleaved gradient + white noise)
       if (pin.cardMask > 0.15 && pin.cardMask < 0.45) {
         const a0 = pin.cardMask; let fs = Math.abs(a0 - 0.25) < 0.002 ? 0.25 : Math.max(0, Math.min(1, (a0 - 0.16) / 0.28)); fs = fs < 0.9 ? Math.min(fs, 0.45) : fs;

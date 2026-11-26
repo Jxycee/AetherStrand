@@ -678,7 +678,8 @@ export const HairViewport = forwardRef<HairViewportHandle, HairViewportProps>(fu
       texturePack,
       shaderRef.current,
       lightingRef.current,
-      visionRef.current
+      visionRef.current,
+      !isSoftwareGl
     );
     hairMatRef.current = hairMaterial;
 

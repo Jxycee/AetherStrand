@@ -95,6 +95,7 @@ Shader "AetherStrand/SculptedHair_URP"
         // Single shared UnityPerMaterial CBUFFER across all passes (100% SRP-Batcher safe)
         CBUFFER_START(UnityPerMaterial)
             float4 _GrooveAoMap_ST;
+            float4 _AlphaMap_TexelSize; // set by Unity; for the alpha map's mip level (tip coverage)
             float4 _HeadCenterWS;
             float4 _RootColor;
             float4 _BaseColor;
@@ -157,11 +158,26 @@ Shader "AetherStrand/SculptedHair_URP"
   // turned back into the lateral position across the lock, which puts each hair on both faces at the same place. 3 hairs
   // per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
   // offset, sway, taper and length from the lock seed.
-        // Mirrors strandCardAlpha in hairShaders.ts.
-        float AetherStrandCardAlpha(float u, float t, float seed)
+        // Mirrors strandCardAlpha in hairShaders.ts (and hairShadingModel.ts for the CPU preview).
+        float AetherStrandLaneX(float u)
         {
-            float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
-                    : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+            return u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
+                 : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+        }
+
+        // Box-filtered coverage of a band |d| < hw through a pixel footprint of half-width r (1D overlap / footprint): a
+        // magnified hair keeps its authored soft edge, a pixel-wide hair gets a one-pixel ramp, and a hair thinner than a
+        // pixel keeps its area (fainter) instead of breaking into speckle.
+        float AetherBandCoverage(float d, float hw, float r)
+        {
+            return saturate((min(d + r, hw) - max(d - r, -hw)) / (2.0 * r));
+        }
+
+        // fwSn / fwT = fwidth of the lane coordinate sn and of t, taken by the caller before any branch (fwidth of f jumps at
+        // the cell seams, and derivatives inside the per-card branch are undefined).
+        float AetherStrandCardAlpha(float u, float t, float seed, float fwSn, float fwT)
+        {
+            float x = AetherStrandLaneX(u);
             float sn = (x * 0.5 + 0.5) * 3.0;
             float cell = min(floor(sn), 2.0);
             float f = sn - cell;
@@ -170,16 +186,29 @@ Shader "AetherStrand/SculptedHair_URP"
             float len = 0.7 + 0.3 * h2;
             float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
             float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
-            return t > len ? 0.0 : 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+            // authored profile: solid to 0.6w, gone at w, so half-width 0.8w with a 0.2w soft edge
+            float r = max(0.2 * w, 0.5 * fwSn);
+            float lenCov = saturate((len - t) / max(fwT, 1e-5) + 0.5);
+            return AetherBandCoverage(abs(f - c), 0.8 * w, r) * lenCov;
         }
 
         // Signed alpha margin of the tip, strand-card and fade-cap cut-outs: coverage minus cutoff (< 0 = cut away), 1 where
         // nothing is cut. soft = the edge comes from a coverage value (wispy tips, strand cards), so alpha to coverage can
         // smooth it; fade caps are a screen-space dither and are always clipped.
-        float AetherTipMargin(float2 uv, float4 vertColor, float2 screenPosXY, out bool soft)
+        float AetherTipMargin(float2 uv, float4 vertColor, float2 screenPosXY, out bool soft, out float directCov)
         {
             soft = false;
+            directCov = -1.0; // >= 0: the edge is already a filtered coverage (strand cards), sent to A2C as is
             float t = saturate(uv.y);
+            // coverage inputs, all taken before any branch so the derivatives are defined
+            float laneFw = fwidth((AetherStrandLaneX(uv.x) * 0.5 + 0.5) * 3.0);
+            float tFw = fwidth(t);
+            float seedD = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0; // seed packed over two 8-bit channels
+            float2 strandUv = float2(uv.x * 0.92 + seedD * 3.13, t);
+            // alpha-map mip level, to keep the alpha-tested coverage as the map minifies (Golus 2017, "Anti-aliased Alpha Test")
+            float2 texPx = strandUv * _AlphaMap_TexelSize.zw;
+            float2 tdx = ddx(texPx), tdy = ddy(texPx);
+            float tipMip = max(0.0, 0.5 * log2(max(dot(tdx, tdx), dot(tdy, tdy))));
             // Mode 1: isFadeCap (vertColor.a == 0.25): dithered-opaque fade. Stays mostly opaque (_FadeOpacity) over the
             // body of the fade and only the last _FadeSoftness of it breaks up (fine interleaved-gradient dither) toward the hairline.
             if (vertColor.a > 0.15 && vertColor.a < 0.45)
@@ -196,8 +225,8 @@ Shader "AetherStrand/SculptedHair_URP"
             if (vertColor.a > 0.5 && vertColor.a < 0.9)
             {
                 soft = true;
-                float seedS = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0;
-                float alphaS = AetherStrandCardAlpha(uv.x, t, seedS);
+                float alphaS = AetherStrandCardAlpha(uv.x, t, seedD, laneFw, tFw);
+                directCov = alphaS;
                 float cutoffS = _AlphaClip;
                 if (_DitherStrength > 0.001)
                     cutoffS = lerp(_AlphaClip, _AlphaClip + (AetherInterleavedGradientNoise(screenPosXY) - 0.5) * 0.45, _DitherStrength);
@@ -207,9 +236,7 @@ Shader "AetherStrand/SculptedHair_URP"
             if (vertColor.a > 0.5 && t > 0.58)
             {
                 soft = true;
-                float seedD = (floor(vertColor.b * 255.0 + 0.5) + vertColor.r) / 255.0; // seed packed over two 8-bit channels
-                float2 strandUv = float2(uv.x * 0.92 + seedD * 3.13, t);
-                float cardAlpha = SAMPLE_TEXTURE2D(_AlphaMap, sampler_AlphaMap, strandUv).r;
+                float cardAlpha = SAMPLE_TEXTURE2D(_AlphaMap, sampler_AlphaMap, strandUv).r * (1.0 + tipMip * 0.25);
                 float edgeDist = min(abs(uv.x - 0.34), abs(uv.x - 0.66));
                 float lateralFray = smoothstep(0.0, 0.075, edgeDist);
                 float tipRamp = smoothstep(0.58, 0.98, t);
@@ -228,8 +255,8 @@ Shader "AetherStrand/SculptedHair_URP"
         void AetherApplyTipAlphaClip(float2 uv, float4 vertColor, float2 screenPosXY)
         {
             #ifdef _USE_ALPHA_CLIP
-            bool soft;
-            clip(AetherTipMargin(uv, vertColor, screenPosXY, soft));
+            bool soft; float directCov;
+            clip(AetherTipMargin(uv, vertColor, screenPosXY, soft, directCov));
             #endif
         }
 
@@ -239,10 +266,11 @@ Shader "AetherStrand/SculptedHair_URP"
         float AetherForwardAlpha(float2 uv, float4 vertColor, float2 screenPosXY)
         {
             #ifdef _USE_ALPHA_CLIP
-            bool soft;
-            float m = AetherTipMargin(uv, vertColor, screenPosXY, soft);
+            bool soft; float directCov;
+            float m = AetherTipMargin(uv, vertColor, screenPosXY, soft, directCov);
             #ifdef _ALPHA_TO_COVERAGE
             float a = saturate(m / max(fwidth(m), 0.0001) + 0.5);
+            if (directCov >= 0.0) a = directCov; // strand cards: already pixel-filtered, sharpening would re-alias them
             if (!soft) { clip(m); a = 1.0; }
             clip(a - 0.001);
             return a;
@@ -747,10 +775,15 @@ Shader "AetherStrand/SculptedHair_URP"
 
         CGINCLUDE
         // strand card coverage, same as the URP SubShader (see the comment there)
-        float AetherStrandCardAlpha(float u, float t, float seed)
+        float AetherStrandLaneX(float u)
         {
-            float x = u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
-                    : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+            return u < 0.17 ? u / 0.17 * 0.76 : u < 0.34 ? lerp(0.76, 1.0, (u - 0.17) / 0.17) : u < 0.5 ? lerp(1.0, 0.0, (u - 0.34) / 0.16)
+                 : u < 0.66 ? lerp(0.0, -1.0, (u - 0.5) / 0.16) : u < 0.83 ? lerp(-1.0, -0.76, (u - 0.66) / 0.17) : lerp(-0.76, 0.0, (u - 0.83) / 0.17);
+        }
+        float AetherBandCoverage(float d, float hw, float r) { return saturate((min(d + r, hw) - max(d - r, -hw)) / (2.0 * r)); }
+        float AetherStrandCardAlpha(float u, float t, float seed, float fwSn, float fwT)
+        {
+            float x = AetherStrandLaneX(u);
             float sn = (x * 0.5 + 0.5) * 3.0;
             float cell = min(floor(sn), 2.0);
             float f = sn - cell;
@@ -759,7 +792,8 @@ Shader "AetherStrand/SculptedHair_URP"
             float len = 0.7 + 0.3 * h2;
             float c = 0.5 + (h1 - 0.5) * 0.4 + sin(t * (4.0 + 4.0 * h2) + h1 * 6.2832) * 0.12;
             float w = 0.13 * (1.0 - 0.7 * smoothstep(0.4, len, t));
-            return t > len ? 0.0 : 1.0 - smoothstep(w * 0.6, w, abs(f - c));
+            float r = max(0.2 * w, 0.5 * fwSn);
+            return AetherBandCoverage(abs(f - c), 0.8 * w, r) * saturate((len - t) / max(fwT, 1e-5) + 0.5);
         }
         ENDCG
 
@@ -861,6 +895,7 @@ Shader "AetherStrand/SculptedHair_URP"
             fixed4 frag(v2f i, fixed facing : VFACE) : SV_Target
             {
                 float t = saturate(i.uv.y);
+                float laneFw = fwidth((AetherStrandLaneX(i.uv.x) * 0.5 + 0.5) * 3.0), tFw = fwidth(t);
                 #ifdef _USE_ALPHA_CLIP
                 if (i.vertColor.a > 0.15 && i.vertColor.a < 0.45)
                 {
@@ -877,7 +912,7 @@ Shader "AetherStrand/SculptedHair_URP"
                 if (i.vertColor.a > 0.5 && i.vertColor.a < 0.9)
                 {
                     // strand card (hybrid fine strands): cut along the whole length
-                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b) - _AlphaClip);
+                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b, laneFw, tFw) - _AlphaClip);
                 }
                 else if (i.vertColor.a > 0.5 && t > 0.70)
                 {
@@ -985,9 +1020,10 @@ Shader "AetherStrand/SculptedHair_URP"
             {
                 #ifdef _USE_ALPHA_CLIP
                 float t = saturate(i.uv.y);
+                float laneFw = fwidth((AetherStrandLaneX(i.uv.x) * 0.5 + 0.5) * 3.0), tFw = fwidth(t);
                 if (i.vertColor.a > 0.5 && i.vertColor.a < 0.9)
                 {
-                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b) - _AlphaClip);
+                    clip(AetherStrandCardAlpha(i.uv.x, t, i.vertColor.b, laneFw, tFw) - _AlphaClip);
                 }
                 else if (i.vertColor.a > 0.5 && t > 0.70)
                 {

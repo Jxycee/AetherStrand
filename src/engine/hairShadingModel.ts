@@ -132,6 +132,10 @@ export function makeShadeEnv(shader: ShaderConfig, tex: HairTextureData, lights:
 export interface ShadeInput {
   u: number; t: number; seed: number; layerAO: number; cardMask: number; scalpRoot: number; gradT: number;
   N: THREE.Vector3; headN: THREE.Vector3; T: THREE.Vector3; V: THREE.Vector3;
+  /** Screen derivatives of u and t per display pixel (as dFdx / dFdy in the shaders). Unset: no footprint (old hard cut). */
+  dudx?: number; dudy?: number; dtdx?: number; dtdy?: number;
+  /** This sample's alpha-to-coverage threshold (0..1) inside its display pixel, when mirroring MSAA + A2C. Unset: the 0.36 cut. */
+  covThr?: number;
 }
 
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -145,19 +149,28 @@ const fract = (x: number) => x - Math.floor(x);
  * per card (a baby-hair card is 6-10 mm wide, so a hair is about one preview pixel at the close-up), each with its own
  * offset, sway, taper and length from the lock seed.
  *  Mirrors strandCardAlpha in hairShaders.ts and AetherStrandCardAlpha in AetherStrand_Hair.shader. */
-export function strandCardAlpha(u: number, t: number, seed: number): number {
-  const x = u < 0.17 ? (u / 0.17) * 0.76 : u < 0.34 ? mix(0.76, 1, (u - 0.17) / 0.17) : u < 0.5 ? mix(1, 0, (u - 0.34) / 0.16)
+export const strandLaneX = (u: number) =>
+  u < 0.17 ? (u / 0.17) * 0.76 : u < 0.34 ? mix(0.76, 1, (u - 0.17) / 0.17) : u < 0.5 ? mix(1, 0, (u - 0.34) / 0.16)
     : u < 0.66 ? mix(0, -1, (u - 0.5) / 0.16) : u < 0.83 ? mix(-1, -0.76, (u - 0.66) / 0.17) : mix(-0.76, 0, (u - 0.83) / 0.17);
+
+/** Box-filtered coverage of a band |d| < hw through a pixel footprint of half-width r (as bandCoverage in the shaders). */
+export const bandCoverage = (d: number, hw: number, r: number) => clamp01((Math.min(d + r, hw) - Math.max(d - r, -hw)) / (2 * r));
+
+/** fwSn / fwT: pixel footprint of the lane coordinate sn and of t (fwidth in the shaders); 0 = a point sample. */
+export function strandCardAlpha(u: number, t: number, seed: number, fwSn = 0, fwT = 0): number {
+  const x = strandLaneX(u);
   const sn = (x * 0.5 + 0.5) * 3;
   const cell = Math.min(Math.floor(sn), 2);
   const f = sn - cell;
   const h1 = fract(Math.sin(cell * 12.9898 + seed * 78.233) * 43758.5453);
   const h2 = fract(Math.sin(cell * 39.3468 + seed * 11.135) * 24634.6345);
   const len = 0.7 + 0.3 * h2;
-  if (t > len) return 0;
   const c = 0.5 + (h1 - 0.5) * 0.4 + Math.sin(t * (4 + 4 * h2) + h1 * 6.2832) * 0.12;
   const wd = 0.13 * (1 - 0.7 * sstep(0.4, len, t));
-  return 1 - sstep(wd * 0.6, wd, Math.abs(f - c));
+  // authored profile: solid to 0.6w, gone at w, so half-width 0.8w with a 0.2w soft edge
+  const r = Math.max(0.2 * wd, 0.5 * fwSn);
+  const lenCov = clamp01((len - t) / Math.max(fwT, 1e-5) + 0.5);
+  return bandCoverage(Math.abs(f - c), 0.8 * wd, r) * lenCov;
 }
 
 /**
@@ -174,6 +187,39 @@ export function sampleMap(px: Uint8ClampedArray, w: number, h: number, u: number
     out[c] = ((a + (b - a) * fx) * (1 - fy) + (d + (e - d) * fx) * fy) / 255;
   }
   return out;
+}
+
+/** Box-filtered mip chain of one channel of an RGBA8 map (level 0 = the map), built once per map. */
+const _mips = new WeakMap<Uint8ClampedArray, { w: number; h: number; px: Float32Array }[]>();
+function mipChain(px: Uint8ClampedArray, w: number, h: number, ch: number) {
+  let chain = _mips.get(px);
+  if (chain) return chain;
+  const l0 = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) l0[i] = px[i * 4 + ch] / 255;
+  chain = [{ w, h, px: l0 }];
+  while (chain[chain.length - 1].w > 1 || chain[chain.length - 1].h > 1) {
+    const p = chain[chain.length - 1], nw = Math.max(1, p.w >> 1), nh = Math.max(1, p.h >> 1), o = new Float32Array(nw * nh);
+    for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+      const x0 = Math.min(p.w - 1, x * 2), x1 = Math.min(p.w - 1, x * 2 + 1), y0 = Math.min(p.h - 1, y * 2), y1 = Math.min(p.h - 1, y * 2 + 1);
+      o[y * nw + x] = (p.px[y0 * p.w + x0] + p.px[y0 * p.w + x1] + p.px[y1 * p.w + x0] + p.px[y1 * p.w + x1]) / 4;
+    }
+    chain.push({ w: nw, h: nh, px: o });
+  }
+  _mips.set(px, chain);
+  return chain;
+}
+const sampleLevel = (L: { w: number; h: number; px: Float32Array }, u: number, v: number) => {
+  const x = fract(u) * L.w - 0.5, y = (1 - clamp01(v)) * (L.h - 1);
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const xa = ((x0 % L.w) + L.w) % L.w, xb = (xa + 1) % L.w, ya = Math.max(0, y0), yb = Math.min(L.h - 1, y0 + 1);
+  const a = L.px[ya * L.w + xa], b = L.px[ya * L.w + xb], d = L.px[yb * L.w + xa], e = L.px[yb * L.w + xb];
+  return (a + (b - a) * fx) * (1 - fy) + (d + (e - d) * fx) * fy;
+};
+/** Trilinear sample of one channel at a mip level (as the GPU's mipmapped alpha map; U repeats, V clamps). */
+export function sampleMapLod(px: Uint8ClampedArray, w: number, h: number, ch: number, u: number, v: number, lod: number): number {
+  const chain = mipChain(px, w, h, ch), l = Math.min(Math.max(0, lod), chain.length - 1), i = Math.floor(l), f = l - i;
+  const a = sampleLevel(chain[i], u, v);
+  return f > 0 && i + 1 < chain.length ? a + (sampleLevel(chain[i + 1], u, v) - a) * f : a;
 }
 
 /** Kajiya-Kay strand highlight (as strandSpecular in the shaders). */
@@ -204,15 +250,30 @@ export function shadeHairPixel(p: ShadeInput, e: ShadeEnv, out: number[]): numbe
     fadeU0 = sstep(fs, 1, t);
   }
   const su = p.u * 0.92 + p.seed * 3.13;
+  // Coverage as hairShaders.ts: footprint-aware strand cards, derivative-normalised tip cut under A2C, 0.36 cut otherwise.
+  const hasFw = p.dudx !== undefined;
+  const dudx = p.dudx ?? 0, dudy = p.dudy ?? 0, dtdx = p.dtdx ?? 0, dtdy = p.dtdy ?? 0;
+  const a2c = p.covThr !== undefined;
   if (p.cardMask > 0.5 && p.cardMask < 0.9) {
-    // strand card (hybrid fine strands): same cut as hairShaders.ts strandCardAlpha
-    if (strandCardAlpha(p.u, t, p.seed) < 0.36) return null;
+    // strand card (hybrid fine strands): same coverage as hairShaders.ts strandCardAlpha
+    const laneSlope = hasFw ? Math.abs(strandLaneX(Math.min(1, p.u + 1e-4)) - strandLaneX(Math.max(0, p.u - 1e-4))) / 2e-4 * 1.5 : 0;
+    const cov = strandCardAlpha(p.u, t, p.seed, laneSlope * (Math.abs(dudx) + Math.abs(dudy)), Math.abs(dtdx) + Math.abs(dtdy));
+    if (a2c ? cov <= p.covThr! : cov < 0.36) return null;
   } else if (p.cardMask > 0.5 && t > 0.58) {
-    const strandAlpha = sampleMap(tex.alphaCard, w, h, su, t, _tmp.a)[0];
-    const edgeDist = Math.min(Math.abs(p.u - 0.34), Math.abs(p.u - 0.66));
-    const lateralFray = sstep(0, 0.075, edgeDist);
-    const tipRamp = sstep(0.58, 0.98, t);
-    if (strandAlpha * mix(1, 0.44 + 0.56 * lateralFray, tipRamp) < 0.36) return null;
+    const tipAlpha = (uu: number, tt: number) => {
+      const s2 = uu * 0.92 + p.seed * 3.13;
+      const edgeDist = Math.min(Math.abs(uu - 0.34), Math.abs(uu - 0.66));
+      return sampleMapLod(tex.alphaCard, w, h, 0, s2, tt, lod) * mip * mix(1, 0.44 + 0.56 * sstep(0, 0.075, edgeDist), sstep(0.58, 0.98, tt));
+    };
+    // mip coverage boost (Golus 2017), from the display-pixel footprint in texels
+    const ex = dudx * 0.92 * w, ey = dtdx * h, fx = dudy * 0.92 * w, fy = dtdy * h;
+    const lod = Math.max(0, 0.5 * Math.log2(Math.max(ex * ex + ey * ey, fx * fx + fy * fy, 1e-12)));
+    const mip = 1 + lod * 0.25;
+    const ta = tipAlpha(p.u, t);
+    if (a2c) {
+      const fwA = Math.abs(tipAlpha(p.u + dudx, t + dtdx) - ta) + Math.abs(tipAlpha(p.u + dudy, t + dtdy) - ta);
+      if (clamp01((ta - 0.36) / Math.max(fwA, 1e-4) + 0.5) <= p.covThr!) return null;
+    } else if (ta < 0.36) return null;
   }
   const lockN = p.N, headN = p.headN;
   const baseN = _v.baseN.copy(lockN).lerp(headN, 0.42).normalize();
