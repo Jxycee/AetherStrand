@@ -49,6 +49,8 @@ namespace AetherStrand
         double hpx, hpy, hpz, hqx, hqy, hqz, hqw;
         public AetherStrandWebSolver Solver => solver;
         public float LastStepMs { get; private set; }
+        public float LastSolverMs { get; private set; }
+        public float LastMeshMs { get; private set; }
         /// <summary>The hybrid inner mass renderer, or null when the geometry has no hybridMass block.</summary>
         public MeshRenderer MassRenderer => massObject != null ? massObject.GetComponent<MeshRenderer>() : null;
 
@@ -167,8 +169,11 @@ namespace AetherStrand
             float t0 = Time.realtimeSinceStartup;
             ReadPoses(out double rpx, out double rpy, out double rpz, out double rqx, out double rqy, out double rqz, out double rqw);
             solver.Step(dt, hpx, hpy, hpz, hqx, hqy, hqz, hqw, rpx, rpy, rpz, rqx, rqy, rqz, rqw, config);
+            float t1 = Time.realtimeSinceStartup;
             Refresh();
-            LastStepMs = (Time.realtimeSinceStartup - t0) * 1000f;
+            float t2 = Time.realtimeSinceStartup;
+            LastSolverMs = (t1 - t0) * 1000f; LastMeshMs = (t2 - t1) * 1000f; // the CPU split: physics vs mesh rebuild and upload
+            LastStepMs = (t2 - t0) * 1000f;
         }
 
         void ReadPoses(out double rpx, out double rpy, out double rpz, out double rqx, out double rqy, out double rqz, out double rqw)

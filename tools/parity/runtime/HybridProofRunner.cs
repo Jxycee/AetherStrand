@@ -42,7 +42,8 @@ public class HybridProofRunner : MonoBehaviour
     int a2cSamples = 4;
 
     struct Res { public int w, h; public string name; }
-    enum Hair { None, Baseline, Hybrid }
+    // HybridLocks / HybridMass: the hybrid with only its locks and cards, or only its inner mass (the flicker split)
+    enum Hair { None, Baseline, Hybrid, HybridLocks, HybridMass }
 
     void Start() { Application.runInBackground = true; StartCoroutine(RunAll()); } // an unfocused editor otherwise throttles play mode
 
@@ -81,10 +82,14 @@ public class HybridProofRunner : MonoBehaviour
             yield return null;
             ParitySheet(hv);
         }
+        // 1b) ear isolation (dev group review, Nov 25): which layer makes the tan band above the ear in Unity
+        ShowHair(Hair.Hybrid); Pose(0); SnapAll(); for (int i = 0; i < warmFrames; i++) TickVisible();
+        yield return null;
+        IsolationSheet();
 
         // 2) the matrix
         var resList = new[] { new Res { w = 1920, h = 1080, name = "1080p" }, new Res { w = 2560, h = 1440, name = "1440p" } };
-        md.AppendLine("| res | alpha | camera | hair | GPU ms/frame (median, FTM) | burst ms/render | hair GPU cost ms | overdraw mean/p95/max | shimmer (hair only) | pops | NaN/inf px (none) | solver+mesh CPU ms |");
+        md.AppendLine("| res | alpha | camera | hair | GPU ms/frame (median / p95, FTM) | burst ms/render | hair GPU cost ms | overdraw mean/p95/max | shimmer (hair only) | pops | NaN/inf px (none) | solver+mesh CPU ms (solver / mesh) |");
         md.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|");
         foreach (var res in resList)
             foreach (var mode in new[] { "a2c", "taa" })
@@ -98,7 +103,9 @@ public class HybridProofRunner : MonoBehaviour
                 {
                     float dk = dist == "close" ? 1.2f : 2.6f;
                     RunStats none = default;
-                    foreach (var hv in new[] { Hair.None, Hair.Baseline, Hair.Hybrid })
+                    var hairs = new List<Hair> { Hair.None, Hair.Baseline, Hair.Hybrid };
+                    if (res.name == "1080p" && a2c && dist == "close") { hairs.Add(Hair.HybridLocks); hairs.Add(Hair.HybridMass); } // flicker split by layer
+                    foreach (var hv in hairs)
                     {
                         string run = res.name + "_" + mode + "_" + dist + "_" + hv.ToString().ToLowerInvariant();
                         var st = new RunStats();
@@ -109,13 +116,13 @@ public class HybridProofRunner : MonoBehaviour
                         double cost = (st.gpuMedian > 0 && none.gpuMedian > 0) ? st.gpuMedian - none.gpuMedian : st.burst - none.burst;
                         double shim = st.shimmer - none.shimmer;
                         md.AppendLine("| " + res.name + " | " + (a2c ? "MSAA " + a2cSamples + "x + A2C" : "clip + dither + TAA") + " | " + dist + " | " + hv
-                            + " | " + F(st.gpuMedian) + " (none " + F(none.gpuMedian) + ") | " + F(st.burst) + " (none " + F(none.burst) + ") | " + F(cost)
+                            + " | " + F(st.gpuMedian) + " / " + F(st.gpuP95) + " (none " + F(none.gpuMedian) + " / " + F(none.gpuP95) + ") | " + F(st.burst) + " (none " + F(none.burst) + ") | " + F(cost)
                             + " | " + (st.odMean > 0 ? F(st.odMean, 1) + " / " + F(st.odP95, 1) + " / " + F(st.odMax, 0) : "see TAA row")
-                            + " | " + F(shim, 4) + " (raw " + F(st.shimmer, 4) + ", peak " + F(st.shimmerPeak, 4) + ") | " + st.pops + " | " + st.badPx + (st.badFirst >= 0 ? " from f" + st.badFirst : "") + " (" + none.badPx + ") | " + F(st.cpuMs) + " |");
-                        json.Add("{\"run\":\"" + run + "\",\"gpuMedianMs\":" + J(st.gpuMedian) + ",\"gpuNoneMs\":" + J(none.gpuMedian) + ",\"burstMs\":" + J(st.burst)
+                            + " | " + F(shim, 4) + " (raw " + F(st.shimmer, 4) + ", peak " + F(st.shimmerPeak, 4) + ") | " + st.pops + " | " + st.badPx + (st.badFirst >= 0 ? " from f" + st.badFirst : "") + " (" + none.badPx + ") | " + F(st.cpuMs) + " (" + F(st.solverMs) + " / " + F(st.meshMs) + ") |");
+                        json.Add("{\"run\":\"" + run + "\",\"gpuMedianMs\":" + J(st.gpuMedian) + ",\"gpuP95Ms\":" + J(st.gpuP95) + ",\"gpuNoneMs\":" + J(none.gpuMedian) + ",\"burstMs\":" + J(st.burst)
                             + ",\"burstNoneMs\":" + J(none.burst) + ",\"hairCostMs\":" + J(cost) + ",\"overdrawMean\":" + J(st.odMean) + ",\"overdrawP95\":" + J(st.odP95)
                             + ",\"overdrawMax\":" + J(st.odMax) + ",\"hairCoverage\":" + J(st.odCoverage) + ",\"shimmerHair\":" + J(shim) + ",\"shimmerRaw\":" + J(st.shimmer)
-                            + ",\"shimmerPeak\":" + J(st.shimmerPeak) + ",\"pops\":" + st.pops + ",\"badPx\":" + st.badPx + ",\"badPxNone\":" + none.badPx + ",\"cpuMs\":" + J(st.cpuMs) + "}");
+                            + ",\"shimmerPeak\":" + J(st.shimmerPeak) + ",\"pops\":" + st.pops + ",\"badPx\":" + st.badPx + ",\"badPxNone\":" + none.badPx + ",\"cpuMs\":" + J(st.cpuMs) + ",\"solverMs\":" + J(st.solverMs) + ",\"meshMs\":" + J(st.meshMs) + "}");
                         Flush();
                     }
                 }
@@ -135,7 +142,7 @@ public class HybridProofRunner : MonoBehaviour
 #endif
     }
 
-    class RunStats { public double gpuMedian, burst, shimmer, shimmerPeak, cpuMs, odMean, odP95, odMax, odCoverage; public int pops; public long badPx; public int badFirst = -1; }
+    class RunStats { public double solverMs, meshMs, gpuP95, gpuMedian, burst, shimmer, shimmerPeak, cpuMs, odMean, odP95, odMax, odCoverage; public int pops; public long badPx; public int badFirst = -1; }
 
     // ---- motion: the web app's turn (HairViewport applyMotionPose / cpu_preview --pose turn), mirrored into Unity ----
     void Pose(int f)
@@ -198,11 +205,14 @@ public class HybridProofRunner : MonoBehaviour
     void ShowHair(Hair h)
     {
         SetVisible(baseline, h == Hair.Baseline);
-        SetVisible(hybrid, h == Hair.Hybrid);
+        SetVisible(hybrid, h == Hair.Hybrid || h == Hair.HybridLocks || h == Hair.HybridMass);
+        var mass = hybrid.MassRenderer;
+        if (h == Hair.HybridLocks && mass != null) mass.enabled = false;
+        if (h == Hair.HybridMass) foreach (var r in hybrid.GetComponentsInChildren<Renderer>(true)) r.enabled = r == mass;
         foreach (var r in paintRenderers) if (r != null) r.enabled = h != Hair.None;
     }
     static void SetVisible(AetherStrandWebHair h, bool on) { foreach (var r in h.GetComponentsInChildren<Renderer>(true)) r.enabled = on; }
-    AetherStrandWebHair Active(Hair h) => h == Hair.Baseline ? baseline : h == Hair.Hybrid ? hybrid : null;
+    AetherStrandWebHair Active(Hair h) => h == Hair.Baseline ? baseline : h == Hair.None ? null : hybrid;
     void SnapAll() { baseline.SnapToHead(); hybrid.SnapToHead(); }
     // both hairs step every frame so the hidden one stays in step and costs the same CPU; only the visible one draws
     double TickVisible() { float t0 = Time.realtimeSinceStartup; baseline.Tick(1f / 60f); hybrid.Tick(1f / 60f); return (Time.realtimeSinceStartup - t0) * 1000.0; }
@@ -217,19 +227,21 @@ public class HybridProofRunner : MonoBehaviour
     IEnumerator Timed(Hair hv, float dk, RenderTexture rt, RunStats st)
     {
         yield return Restart(hv, dk);
-        var gpu = new List<double>(); var cpu = new List<double>(); var ft = new FrameTiming[1];
+        var gpu = new List<double>(); var cpu = new List<double>(); var sol = new List<double>(); var msh = new List<double>(); var ft = new FrameTiming[1];
         for (int f = 1; f <= runFrames; f++)
         {
             Pose(f); CamAt(f, dk);
             float t0 = Time.realtimeSinceStartup;
-            Active(hv)?.Tick(1f / 60f);
+            var ah = Active(hv);
+            ah?.Tick(1f / 60f);
             cpu.Add((Time.realtimeSinceStartup - t0) * 1000.0);
+            if (ah != null) { sol.Add(ah.LastSolverMs); msh.Add(ah.LastMeshMs); }
             Draw();
             FrameTimingManager.CaptureFrameTimings();
             if (FrameTimingManager.GetLatestTimings(1, ft) > 0 && f > 10 && ft[0].gpuFrameTime > 0) gpu.Add(ft[0].gpuFrameTime);
             yield return null;
         }
-        st.gpuMedian = Median(gpu); st.cpuMs = hv == Hair.None ? 0 : Median(cpu);
+        st.gpuMedian = Median(gpu); st.gpuP95 = Pct(gpu, 0.95); st.cpuMs = hv == Hair.None ? 0 : Median(cpu); st.solverMs = Median(sol); st.meshMs = Median(msh);
         // burst timing at three poses along the path
         var burst = new List<double>();
         foreach (int f in new[] { runFrames / 4, runFrames / 2, 3 * runFrames / 4 })
@@ -369,6 +381,63 @@ public class HybridProofRunner : MonoBehaviour
         Destroy(sheet); Destroy(th); cam.targetTexture = null; rt.Release(); Destroy(rt);
     }
 
+    // ---- ear isolation: the hybrid's left side at rest, close, one layer at a time (dev group review, Nov 25) ----
+    // Panels: all | paint only | mass + paint | mass in flat grey, no paint | locks and cards + paint | paint, lights logged.
+    // Tells whether the tan band above the ear comes from the mass's material, its lighting, its edge, or a pale paint under it.
+    void IsolationSheet()
+    {
+        const int S = 768;
+        var rt = new RenderTexture(S, S, 24, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+        cam.targetTexture = rt; cam.aspect = 1f;
+        Vector3 fwd = root.forward, right = root.right;
+        // the parity sheet's left view (web +x), pulled in to frame the ear and the hairline above it
+        cam.transform.position = frameCentre + (right * -0.95f + Vector3.up * -0.08f + fwd * 0.18f) * frameScale;
+        cam.transform.LookAt(frameCentre + Vector3.up * (-0.10f * frameScale) + right * (-0.30f * frameScale));
+        var mass = hybrid.MassRenderer;
+        var grey = new Material(Shader.Find("Universal Render Pipeline/Lit")); grey.SetColor("_BaseColor", new Color(0.5f, 0.5f, 0.5f, 1f)); grey.SetFloat("_Smoothness", 0.2f);
+        Material massMat = mass != null ? mass.sharedMaterial : null;
+        string[] names = { "all", "paint only", "mass + paint", "mass flat grey, no paint", "locks + cards + paint", "nothing (skin)" };
+        var sheet = new Texture2D(S * 3, S * 2, TextureFormat.RGB24, false);
+        var th = new Texture2D(S, S, TextureFormat.RGBAHalf, false, true);
+        for (int k = 0; k < 6; k++)
+        {
+            ShowHair(Hair.Hybrid);
+            var hr = hybrid.GetComponentsInChildren<Renderer>(true);
+            bool paint = k != 3 && k != 5;
+            foreach (var r in paintRenderers) if (r != null) r.enabled = paint;
+            foreach (var r in hr)
+            {
+                bool isMass = r == mass;
+                r.enabled = k == 0 || (k == 2 && isMass) || (k == 3 && isMass) || (k == 4 && !isMass);
+            }
+            if (mass != null) mass.sharedMaterial = k == 3 ? grey : massMat;
+            Draw(); RenderTexture.active = rt; th.ReadPixels(new Rect(0, 0, S, S), 0, 0, false); RenderTexture.active = null;
+            var tm = ToneMap(th, 1);
+            sheet.SetPixels((k % 3) * S, (1 - k / 3) * S, S, S, tm.GetPixels()); Destroy(tm);
+        }
+        if (mass != null) mass.sharedMaterial = massMat;
+        ShowHair(Hair.Hybrid);
+        sheet.Apply(false);
+        File.WriteAllBytes(Path.Combine(outDir, "ear_isolation.png"), sheet.EncodeToPNG());
+        Destroy(sheet); Destroy(th); Destroy(grey); cam.targetTexture = null; rt.Release(); Destroy(rt);
+        // what lights the paint in Unity; the web lights it with a fixed direction (-0.4, 0.8, 0.6), colour x1, no ambient
+        var L = RenderSettings.sun != null ? RenderSettings.sun : FindAnyLight();
+        var sb = new StringBuilder("## Ear isolation\n\nPanels, left to right then down: " + string.Join(" | ", names) + ".\n\n");
+        foreach (var r in paintRenderers)
+            if (r != null && r.sharedMaterial != null && r.sharedMaterial.HasProperty("_Color"))
+            { var c = r.sharedMaterial.GetColor("_Color"); sb.Append("- Paint _Color sRGB " + F(c.r, 3) + ", " + F(c.g, 3) + ", " + F(c.b, 3) + " (linear " + F(c.linear.r, 3) + ", " + F(c.linear.g, 3) + ", " + F(c.linear.b, 3) + ")\n"); break; }
+        if (L != null) sb.Append("- Main light " + L.name + ": colour " + F(L.color.r, 3) + ", " + F(L.color.g, 3) + ", " + F(L.color.b, 3) + " x intensity " + F(L.intensity, 3) + ", direction to light " + V3(-L.transform.forward) + " (web paint uses (-0.4, 0.8, 0.6) normalised, colour 1)\n");
+        else sb.Append("- No main light found\n");
+        var sh = RenderSettings.ambientProbe; var outs = new Color[1];
+        sh.Evaluate(new[] { -root.right }, outs);
+        sb.Append("- Ambient (SH) on the left side of the head: " + F(outs[0].r, 3) + ", " + F(outs[0].g, 3) + ", " + F(outs[0].b, 3) + " (the Unity paint adds 0.25 x this; the web adds none)\n");
+        sb.Append("- Ambient mode " + RenderSettings.ambientMode + ", intensity " + F(RenderSettings.ambientIntensity, 3) + "\n\n");
+        md.Append(sb);
+        Log("HYBRIDPROOF ear isolation written");
+    }
+    static Light FindAnyLight() { foreach (var l in FindObjectsByType<Light>(FindObjectsSortMode.None)) if (l.type == LightType.Directional && l.isActiveAndEnabled) return l; return null; }
+    static string V3(Vector3 v) => "(" + F(v.x, 3) + ", " + F(v.y, 3) + ", " + F(v.z, 3) + ")";
+
     // ---- camera and material modes ----
     void SetAa(UniversalAdditionalCameraData ucd, UniversalRenderPipelineAsset urp, bool msaa, bool taa)
     {
@@ -393,6 +462,7 @@ public class HybridProofRunner : MonoBehaviour
     // ---- helpers ----
     static int LockTris(AetherStrandWebHair h) { var mf = h != null ? h.GetComponent<MeshFilter>() : null; return mf != null && mf.sharedMesh != null ? (int)(mf.sharedMesh.GetIndexCount(0) / 3) : 0; }
     static int MassTris(AetherStrandWebHair h) { var r = h != null ? h.MassRenderer : null; var mf = r != null ? r.GetComponent<MeshFilter>() : null; return mf != null && mf.sharedMesh != null ? (int)(mf.sharedMesh.GetIndexCount(0) / 3) : 0; }
+    static double Pct(List<double> v, double p) { if (v.Count == 0) return 0; var c = new List<double>(v); c.Sort(); return c[Math.Min(c.Count - 1, (int)Math.Floor(p * c.Count))]; }
     static double Median(List<double> v) { if (v.Count == 0) return 0; var c = new List<double>(v); c.Sort(); return c[c.Count / 2]; }
     static string F(double v, int d = 2) => v.ToString("F" + d, IC);
     static string J(double v) => double.IsNaN(v) || double.IsInfinity(v) ? "null" : v.ToString("R", IC);

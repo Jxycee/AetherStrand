@@ -111,6 +111,8 @@ export interface HairMass {
   bindW: Float32Array;
   /** Each vertex's rest height over the scalp (m) and the follow limits (deformHairMass). */
   restHeight: Float32Array;
+  /** Weight toward the outline (1 on it, 0 from edgeRollCells hops in): colour rolls to the fade and the normal to the scalp's. */
+  edgeW: Float32Array;
   followShare: number;
   followSmooth: number;
   /** Vertex neighbours, CSR: neighbours of i are adjIdx[adjStart[i] .. adjStart[i+1]). */
@@ -447,7 +449,7 @@ export function buildHairMass(locks: MassLockInput[], restNodesNow: THREE.Vector
   const positions = rest.slice();
   const normals = new Float32Array(V * 3), headNormals = new Float32Array(V * 3), tangents = new Float32Array(V * 3);
   const uvs = new Float32Array(V * 2), seeds = new Float32Array(V), layerAO = new Float32Array(V), cardMask = new Float32Array(V);
-  const scalpRoot = new Float32Array(V), gradT = new Float32Array(V);
+  const scalpRoot = new Float32Array(V), gradT = new Float32Array(V), edgeW = new Float32Array(V);
   const hn = new THREE.Vector3(), tg = new THREE.Vector3(), t1 = new THREE.Vector3();
   const lockSeed = Array.from({ length: locks.length }, () => rnd());
   // Hops from the outline (vertices on an edge used by one triangle only), so the colour can roll into the painted short
@@ -503,6 +505,7 @@ export function buildHairMass(locks: MassLockInput[], restNodesNow: THREE.Vector
     // Toward the outline (edgeRollCells hops) it takes the root colour and full scalp-root shading, the colour of the
     // painted short hair it meets, so the edge reads as the hair thinning into the fade instead of a lip.
     const edge = edgeRoll > 0 ? 1 - sstep(0, edgeRoll, hop[i]) : 0;
+    edgeW[i] = edge;
     layerAO[i] = 0.7 - 0.12 * edge;
     cardMask[i] = 0;
     scalpRoot[i] = 0.4 + 0.6 * edge;
@@ -588,7 +591,7 @@ export function buildHairMass(locks: MassLockInput[], restNodesNow: THREE.Vector
   const restHeight = new Float32Array(V);
   vCell.forEach((k, i) => { restHeight[i] = mm[k] / 1000; });
   const mass: HairMass = {
-    restHeight, followShare: o.followShare ?? 0.5, followSmooth: o.followSmooth ?? 8, adjStart, adjIdx, offA: new Float32Array(V * 3), offB: new Float32Array(V * 3),
+    restHeight, edgeW, followShare: o.followShare ?? 0.5, followSmooth: o.followSmooth ?? 8, adjStart, adjIdx, offA: new Float32Array(V * 3), offB: new Float32Array(V * 3),
     vBlock, vInterpB, vInterpW, blockCount, bAdjStart, bAdjIdx, bA: new Float32Array(blockCount * 3), bB: new Float32Array(blockCount * 3), bN: new Float32Array(blockCount),
     vertexCount: V, rest, geometry, positions, normals, headNormals, tangents, restHeadNormals: headNormals.slice(), restTangents: tangents.slice(), bindNode, bindW, bindCount: K, nodesPerLock, restNodes,
     grid: { cols, rows, azStep, phiStep, mask, mm },
@@ -623,8 +626,11 @@ export function computeMassNormals(m: HairMass): void {
     if (x * m.headNormals[i * 3] + y * m.headNormals[i * 3 + 1] + z * m.headNormals[i * 3 + 2] < 0) { x = -x; y = -y; z = -z; }
     // half toward the head normal: the mass stands for a volume of hair over the head, so it is lit by the head's form;
     // its feathered roll-off at the edge (a device to hide the edge) would otherwise face down and read as a black band
+    // Toward the outline it turns all the way to the head normal, so the edge is lit like the scalp it lies on and shows
+    // no lighting step even where the colours match (Neon's review, Nov 25).
     let l = Math.hypot(x, y, z) || 1;
-    x = x / l + m.headNormals[i * 3]; y = y / l + m.headNormals[i * 3 + 1]; z = z / l + m.headNormals[i * 3 + 2];
+    const w = m.edgeW ? m.edgeW[i] : 0, keep = 1 - w, toward = 1 + w;
+    x = (x / l) * keep + m.headNormals[i * 3] * toward; y = (y / l) * keep + m.headNormals[i * 3 + 1] * toward; z = (z / l) * keep + m.headNormals[i * 3 + 2] * toward;
     l = Math.hypot(x, y, z) || 1;
     Nn[i * 3] = x / l; Nn[i * 3 + 1] = y / l; Nn[i * 3 + 2] = z / l;
   }
