@@ -81,6 +81,8 @@ namespace AetherStrand.Editor
             hair.unitScale = (fit.scale.x + fit.scale.y + fit.scale.z) / 3f;
             hair.fitBone = head; hair.fitScale = fit.scale; hair.fitOffset = fit.offset;
             hair.material = mat;
+            hair.massSkin = AetherStrandScalpPaint.HeadSkinPoints(character, head);
+            hair.massSkinCenter = AetherStrandHeadFit.Apply(fit, AetherStrandHeadFit.WebHeadCenter);
             var drv = go.AddComponent<AetherStrandHeadCenterDriver>();
             drv.headBone = head; drv.localCenter = AetherStrandHeadFit.Apply(fit, AetherStrandHeadFit.WebHeadCenter);
             AetherStrandScalpPaint.Build(character, geoAsset, mat, outputFolder, baseName);

@@ -32,6 +32,11 @@ namespace AetherStrand
         public Transform fitBone;
         public Vector3 fitScale = Vector3.one;
         public Vector3 fitOffset = Vector3.zero;
+        /// <summary>The character's head-weighted skin vertices, head-bone local (set by ApplyLive): the inner mass is seated on
+        /// this skin, not on the scaled web head, so it cannot sink into a skull that bulges past it (AetherStrandWebMassMesh.SeatOnSkin).</summary>
+        [HideInInspector] public Vector3[] massSkin = new Vector3[0];
+        /// <summary>Head centre in head-bone-local space (the fitted web head centre), for SeatOnSkin.</summary>
+        [HideInInspector] public Vector3 massSkinCenter;
         [Tooltip("Simulate at the web's 60 Hz (deterministic); false = one variable step per frame (web live mode).")]
         public bool fixedTimestep = true;
         [Tooltip("Off: the hair steps itself every frame. On: it only moves when Tick is called (test harnesses, cutscene scrubbing).")]
@@ -52,6 +57,7 @@ namespace AetherStrand
         public float LastSolverMs { get; private set; }
         public float LastMeshMs { get; private set; }
         /// <summary>The hybrid inner mass renderer, or null when the geometry has no hybridMass block.</summary>
+        public string MassSeatReport => massBuilder != null ? massBuilder.SeatReport : "no mass";
         public MeshRenderer MassRenderer => massObject != null ? massObject.GetComponent<MeshRenderer>() : null;
 
         void Start()
@@ -82,7 +88,10 @@ namespace AetherStrand
             {
                 mass.SetRestNodes(locks);
                 massBuilder = new AetherStrandWebMassMesh(mass);
-                if (fitBone != null) { massBuilder.useFit = true; massBuilder.fitScale = fitScale; massBuilder.fitOffset = fitOffset; }
+                if (fitBone != null)
+                {
+                    massBuilder.useFit = true; massBuilder.fitScale = fitScale; massBuilder.fitOffset = fitOffset;
+                }
             }
 
             origin = headPivot.position - new Vector3(0f, 0.44f * unitScale, 0f);
@@ -113,6 +122,13 @@ namespace AetherStrand
             ReadHead(out hpx, out hpy, out hpz, out hqx, out hqy, out hqz, out hqw);
             solver.SnapToHead(hpx, hpy, hpz, hqx, hqy, hqz, hqw, config.strandWidthScale);
             Refresh();
+            if (massBuilder != null && massBuilder.useFit && massSkin != null && massSkin.Length > 0)
+            {
+                // seat the mass on the character's skin from its rest pose; 1 mm in head-bone units, the web mass's edge height
+                massBuilder.SeatOnSkin(massSkin, massSkinCenter, 0.001f / Mathf.Max(1e-6f, fitBone.lossyScale.y));
+                Refresh();
+                Debug.Log("[AetherStrand] " + massBuilder.SeatReport);
+            }
         }
 
         public void ApplyImpulse(Vector3 unityWorldImpulse) => solver?.ApplyImpulse(-unityWorldImpulse.x, unityWorldImpulse.y, unityWorldImpulse.z);

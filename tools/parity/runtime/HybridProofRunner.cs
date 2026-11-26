@@ -68,7 +68,7 @@ public class HybridProofRunner : MonoBehaviour
         md.AppendLine("# Hybrid proof, " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", IC));
         md.AppendLine();
         md.AppendLine("GPU: " + SystemInfo.graphicsDeviceName + " (" + SystemInfo.graphicsDeviceType + "), Unity " + Application.unityVersion
-            + ". Locks baseline " + LockTris(baseline) + " tris, hybrid " + LockTris(hybrid) + " tris + mass " + MassTris(hybrid) + " tris.");
+            + ". Locks baseline " + LockTris(baseline) + " tris, hybrid " + LockTris(hybrid) + " tris + mass " + MassTris(hybrid) + " tris. Hybrid " + hybrid.MassSeatReport + ".");
         md.AppendLine();
         WriteCamPath();
         cam.backgroundColor = clearLinear;

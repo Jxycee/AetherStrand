@@ -54,6 +54,33 @@ namespace AetherStrand.Editor
         }
 
         /// <summary>Head-weighted skin triangles (all three corners weighted > 0.5 to the head bone) that the paint can reach, in head-bone space.</summary>
+        /// <summary>Head-bone-local positions of the character's skin vertices weighted over half to the head bone (the same
+        /// vertices the paint shell is built from). The inner mass is seated on them (AetherStrandWebMassMesh.SeatOnSkin).</summary>
+        public static Vector3[] HeadSkinPoints(GameObject character, Transform head)
+        {
+            var pts = new List<Vector3>();
+            foreach (var smr in character.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (smr.sharedMesh == null || smr.name.StartsWith("Hair_") || smr.name.Contains("AetherStrand")) continue;
+                var mesh = smr.sharedMesh;
+                int hi = System.Array.IndexOf(smr.bones, head);
+                if (hi < 0 || hi >= mesh.bindposes.Length) continue;
+                Matrix4x4 bp = mesh.bindposes[hi];
+                var weights = mesh.GetAllBoneWeights();
+                var perVertex = mesh.GetBonesPerVertex();
+                var verts = mesh.vertices;
+                int wi = 0;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    float w = 0f;
+                    for (int k = 0; k < perVertex[i]; k++) if (weights[wi + k].boneIndex == hi) w += weights[wi + k].weight;
+                    wi += perVertex[i];
+                    if (w > 0.5f) pts.Add(bp.MultiplyPoint3x4(verts[i]));
+                }
+            }
+            return pts.ToArray();
+        }
+
         public static Mesh BuildShell(GameObject character, Transform head, AetherStrandHeadFit.Fit fit, ScalpPaintData paint, float lift)
         {
             var pos = new List<Vector3>(); var nrm = new List<Vector3>(); var web = new List<Vector3>(); var tris = new List<int>();
