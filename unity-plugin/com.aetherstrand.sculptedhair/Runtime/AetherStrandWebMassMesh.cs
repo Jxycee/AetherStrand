@@ -79,7 +79,8 @@ namespace AetherStrand
             float maxMove = 0.015f * fs; // a correction past 1.5 cm means the lookup found something that is not the scalp
             for (int i = 0; i < V; i++)
             {
-                Vector3 d = verts[i] - headCenterLocal; // the mesh as last written, at the snapped rest pose (call after Update) float r = d.magnitude; if (r < 1e-6f) continue;
+                Vector3 d = verts[i] - headCenterLocal; // the mesh as last written, at the snapped rest pose (call after Update)
+                float r = d.magnitude; if (r < 1e-6f) continue;
                 dir[i] = d / r;
                 int ci = Cell(dir[i], AZ, PH), ca = ci % AZ, cp = ci / AZ;
                 float sum = 0f; int n = 0;
