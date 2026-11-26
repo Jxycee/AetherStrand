@@ -301,14 +301,35 @@ namespace AetherStrand
                     double halfT = isFade ? baseHalfT * rootThickTuck * 0.55 * (1.0 - (sm > 1 ? sTF : TipFactor[k]) * 0.65) : baseHalfT * rootThickTuck * (customTip ? ctT : (sm > 1 ? sTP : ThickPow[k]));
                     if (round > 0 && !isFade && !isBase) halfT += (halfW * 0.9 * rootThickTuck - halfT) * round;
 
+                    // The output mapping is affine (MapPoint) or linear then normalised (MapDir), so it is applied once per ring to
+                    // the centre and the two cross-section axes, and each ring vertex is a weighted sum of those (same result as
+                    // mapping every vertex, about a quarter of the work: this loop runs for every vertex of every lock every frame).
+                    Vector3 c0 = MapPoint(px0, py0, pz0);
+                    double cx0 = c0.x, cy0 = c0.y, cz0 = c0.z;
+                    double psx, psy, psz, pox, poy, poz; // position axes, mapped (linear part of MapPoint)
+                    double nsx, nsy, nsz, nox, noy, noz; // normal axes, mapped (linear part of MapDir kind 0, before normalising)
+                    if (!fit)
+                    {
+                        psx = -sx * us; psy = sy * us; psz = sz * us; pox = -ox * us; poy = oy * us; poz = oz * us;
+                        nsx = -sx; nsy = sy; nsz = sz; nox = -ox; noy = oy; noz = oz;
+                    }
+                    else
+                    {
+                        RotConj(sx, sy, sz, cqx, cqy, cqz, cqw, out double lx, out double ly, out double lz);
+                        psx = -lx * fsx; psy = ly * fsy; psz = lz * fsz; nsx = -lx / fsx; nsy = ly / fsy; nsz = lz / fsz;
+                        RotConj(ox, oy, oz, cqx, cqy, cqz, cqw, out lx, out ly, out lz);
+                        pox = -lx * fsx; poy = ly * fsy; poz = lz * fsz; nox = -lx / fsx; noy = ly / fsy; noz = lz / fsz;
+                    }
+                    Vector3 tvR = MapDir(stx, sty, stz, 1);
+                    Vector4 tanR = new Vector4(tvR.x, tvR.y, tvR.z, 1f);
                     for (int r = 0; r < RingVerts; r++)
                     {
                         double a = PX[r] * halfW, c = PY[r] * halfT;
-                        double vx = px0 + sx * a + ox * c, vy = py0 + sy * a + oy * c, vz = pz0 + sz * a + oz * c;
-                        verts[vIdx] = MapPoint(vx, vy, vz);
-                        double nx = sx * PNX[r] + ox * PNY[r], ny = sy * PNX[r] + oy * PNY[r], nz = sz * PNX[r] + oz * PNY[r];
-                        norms[vIdx] = MapDir(nx, ny, nz, 0);
-                        { Vector3 tv = MapDir(stx, sty, stz, 1); tans[vIdx] = new Vector4(tv.x, tv.y, tv.z, 1f); }
+                        verts[vIdx] = new Vector3((float)(cx0 + psx * a + pox * c), (float)(cy0 + psy * a + poy * c), (float)(cz0 + psz * a + poz * c));
+                        double nx = nsx * PNX[r] + nox * PNY[r], ny = nsy * PNX[r] + noy * PNY[r], nz = nsz * PNX[r] + noz * PNY[r];
+                        if (fit) { double l = System.Math.Sqrt(nx * nx + ny * ny + nz * nz); if (l < 1e-12) l = 1; nx /= l; ny /= l; nz /= l; }
+                        norms[vIdx] = new Vector3((float)nx, (float)ny, (float)nz);
+                        tans[vIdx] = tanR;
                         vIdx++;
                     }
                 }
@@ -338,6 +359,13 @@ namespace AetherStrand
             mesh.SetNormals(norms);
             mesh.SetTangents(tans);
             mesh.RecalculateBounds();
+        }
+
+        /// <summary>v rotated by the quaternion (qx, qy, qz, qw) (the conjugate head rotation in Update; same formula as MapPoint).</summary>
+        static void RotConj(double x, double y, double z, double qx, double qy, double qz, double qw, out double lx, out double ly, out double lz)
+        {
+            double tx2 = 2 * (qy * z - qz * y), ty2 = 2 * (qz * x - qx * z), tz2 = 2 * (qx * y - qy * x);
+            lx = x + qw * tx2 + (qy * tz2 - qz * ty2); ly = y + qw * ty2 + (qz * tx2 - qx * tz2); lz = z + qw * tz2 + (qx * ty2 - qy * tx2);
         }
 
         /// <summary>Per-lock tip shape, mirror of computeTipShape in hairPhysics.ts (mesh only).</summary>
