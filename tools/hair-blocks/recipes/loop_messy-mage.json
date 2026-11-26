@@ -14,7 +14,8 @@
     "layerShag": 0.85,
     "density": 1.1,
     "strandWidth": 0.95,
-    "seed": 4417
+    "seed": 4417,
+    "scalpColor": "#3f3833"
   },
   "shader": {
     "rootColor": "#0e0907",

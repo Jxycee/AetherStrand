@@ -465,6 +465,16 @@ Recipe `shader.cardBake` (all optional; defaults in `CARD_BAKE_DEFAULTS`, slider
 - `npx tsx tools/cards/bake_cards.ts --unity [--recipe r.json]` rewrites the plugin's package textures. The package
   ships the default bake; a style with its own `cardBake` brings its maps in its ZIP export.
 
+## Scalp paint calibration
+
+`npx tsx tools/preview/paint_calibrate.ts recipe.json [--head Head.obj] [--target 1.0] [--write] [preview flags]` tones a
+style's painted short hair to its own lit hair: it renders left, 3/4 and back views with the preview renderer, measures the
+mean linear luminance of the paint that shows and of the hair, and scales the paint colour (hue kept) until paint / hair =
+target. `--write` stores it as `builder.scalpColor`, which the web app, the preview and the Unity export use as the paint
+colour. Why: the default paint rule (PAINT_MIX x PAINT_SHEEN + PAINT_SPEC) gave 1.06x on the undercut but 2.5x on Messy
+Mage, a tan band above the ears; the gap comes from how the geometry renders, which no rule on the colours alone predicts.
+Messy Mage: #71665d (2.52x) to #3f3833 (1.03x), Nov 26.
+
 ## Preview renderer (for humans and AI)
 
 `npx tsx tools/preview/cpu_preview.ts --recipe recipe.json --out sheet.png` renders the real lock geometry, with no GPU.
