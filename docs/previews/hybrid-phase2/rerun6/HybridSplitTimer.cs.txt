@@ -1,0 +1,93 @@
+// Temporary timing probe for rerun 6 (not part of the parity tools). In a player started with -hpSplit <file> it switches
+// the proof runner off, drives the same head motion, and times the solver, the lock mesh (kernel build vs Mesh upload)
+// and the mass mesh separately.
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using UnityEngine;
+
+public class HybridSplitTimer : MonoBehaviour
+{
+    const BindingFlags BF = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+    HybridProofRunner run;
+    string outFile;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    static void Boot()
+    {
+        if (Application.isEditor) return;
+        var a = Environment.GetCommandLineArgs();
+        for (int i = 0; i + 1 < a.Length; i++)
+        {
+            if (a[i] != "-hpSplit") continue;
+            var r = FindAnyObjectByType<HybridProofRunner>();
+            if (r == null) { UnityEngine.Debug.LogError("SPLIT no runner"); Application.Quit(1); return; }
+            r.enabled = false; // before its Start
+            var t = new GameObject("HybridSplitTimer").AddComponent<HybridSplitTimer>();
+            t.run = r; t.outFile = a[i + 1];
+        }
+    }
+
+    static object Get(object o, string n) => o.GetType().GetField(n, BF).GetValue(o);
+    static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+
+    static string Stat(List<double> v)
+    {
+        var s = new List<double>(v); s.Sort();
+        return s[s.Count / 2].ToString("F3") + " / " + s[(int)(s.Count * 0.95)].ToString("F3");
+    }
+
+    IEnumerator Start()
+    {
+        QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1; Application.runInBackground = true;
+        typeof(HybridProofRunner).GetField("headRestRot", BF).SetValue(run, run.head.rotation);
+        typeof(HybridProofRunner).GetField("headRestPos", BF).SetValue(run, run.head.position);
+        var pose = typeof(HybridProofRunner).GetMethod("Pose", BF);
+        yield return null; yield return null; // let the hair components build
+        var sb = new StringBuilder("ms per frame, median / p95, 600 frames, head moving as in the proof\n");
+        foreach (var hair in new[] { run.baseline, run.hybrid })
+        {
+            object mesh = Get(hair, "meshBuilder"), mass = Get(hair, "massBuilder"), cfg = Get(hair, "config");
+            var meshUpdate = mesh.GetType().GetMethod("Update", BF);
+            var massUpdate = mass != null ? mass.GetType().GetMethod("Update", BF) : null;
+            var m = (Mesh)Get(mesh, "mesh");
+            var verts = (Vector3[])Get(mesh, "verts"); var norms = (Vector3[])Get(mesh, "norms"); var tans = (Vector4[])Get(mesh, "tans");
+            var solver = new List<double>(); var tickMesh = new List<double>(); var lockAll = new List<double>();
+            var upload = new List<double>(); var build = new List<double>(); var massMs = new List<double>();
+            var sw = new Stopwatch();
+            for (int f = -120; f < 600; f++)
+            {
+                pose.Invoke(run, new object[] { (f + 120) % 150 });
+                hair.Tick(1f / 60f);
+                object[] head = { Get(hair, "hpx"), Get(hair, "hpy"), Get(hair, "hpz"), Get(hair, "hqx"), Get(hair, "hqy"), Get(hair, "hqz"), Get(hair, "hqw") };
+                var wid = Convert.ToDouble(Get(cfg, "strandWidthScale"));
+                var a1 = new object[] { head[0], head[1], head[2], head[3], head[4], head[5], head[6], wid, hair.unitScale };
+                sw.Restart(); meshUpdate.Invoke(mesh, a1); sw.Stop(); double tl = Ms(sw.ElapsedTicks);
+                // the upload half of that call, repeated on the same arrays
+                sw.Restart(); m.SetVertices(verts); m.SetNormals(norms); m.SetTangents(tans); m.RecalculateBounds(); sw.Stop(); double tu = Ms(sw.ElapsedTicks);
+                double tm = 0;
+                if (massUpdate != null)
+                {
+                    var a2 = new object[] { hair.Solver, head[0], head[1], head[2], head[3], head[4], head[5], head[6], hair.unitScale };
+                    sw.Restart(); massUpdate.Invoke(mass, a2); sw.Stop(); tm = Ms(sw.ElapsedTicks);
+                }
+                if (f >= 0) { solver.Add(hair.LastSolverMs); tickMesh.Add(hair.LastMeshMs); lockAll.Add(tl); upload.Add(tu); build.Add(Math.Max(0, tl - tu)); massMs.Add(tm); }
+                if (f % 30 == 0) yield return null;
+            }
+            sb.Append("\n[" + (hair == run.hybrid ? "hybrid" : "baseline") + "]\n");
+            sb.Append("solver " + Stat(solver) + "\n");
+            sb.Append("mesh as Tick reports it (lock + mass) " + Stat(tickMesh) + "\n");
+            sb.Append("lock mesh total " + Stat(lockAll) + "\n");
+            sb.Append("lock mesh build " + Stat(build) + "\n");
+            sb.Append("lock mesh upload (Set* + bounds) " + Stat(upload) + "\n");
+            sb.Append("mass mesh " + (massUpdate != null ? Stat(massMs) : "none") + "\n");
+        }
+        File.WriteAllText(outFile, sb.ToString());
+        UnityEngine.Debug.Log("SPLIT done " + sb);
+        Application.Quit(0);
+    }
+}

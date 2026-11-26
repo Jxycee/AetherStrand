@@ -1,0 +1,17 @@
+ms per frame, median / p95, 600 frames, head moving as in the proof
+
+[baseline]
+solver 7.605 / 8.088
+mesh as Tick reports it (lock + mass) 4.189 / 4.891
+lock mesh total 4.076 / 4.780
+lock mesh build 2.974 / 3.435
+lock mesh upload (Set* + bounds) 1.044 / 1.713
+mass mesh none
+
+[hybrid]
+solver 7.053 / 7.500
+mesh as Tick reports it (lock + mass) 5.268 / 6.018
+lock mesh total 4.179 / 4.888
+lock mesh build 3.057 / 3.471
+lock mesh upload (Set* + bounds) 1.049 / 1.719
+mass mesh 0.988 / 1.111
