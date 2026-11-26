@@ -279,7 +279,7 @@ export function shadeHairPixel(p: ShadeInput, e: ShadeEnv, out: number[]): numbe
   const sheenKey = strandSpecular(tS, V, L.keyDir, S.sheenPower) * keyFacing;
   const sheenRim = strandSpecular(tS, V, L.rimDir, S.sheenPower) * backFacing * 0.6;
 
-  const fresnel = Math.pow(1 - Math.max(0, baseN.dot(V)), e.rimPower);
+  const fresnel = Math.pow(1 - Math.min(1, Math.max(0, baseN.dot(V))), e.rimPower); // clamp at 1 too: a dot of unit vectors can exceed 1, and pow of a negative base is NaN
   const backGate = Math.pow(Math.max(0, -V.dot(L.rimDir)), 1.4) * 0.45 + 0.55;
   const tipWeight = mix(0.22, 1, sstep(0.28, 0.94, t));
   const rimK = fresnel * backGate * tipWeight * e.rimIntensity * 0.42 * mix(0.72, 1, p.layerAO) * mix(1, 0.3, fadeMask);

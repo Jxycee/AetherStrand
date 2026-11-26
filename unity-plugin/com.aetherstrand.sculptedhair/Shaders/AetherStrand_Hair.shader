@@ -317,14 +317,22 @@ Shader "AetherStrand/SculptedHair_URP"
                 float  gradT       : TEXCOORD8; // < 0: use uv.y
             };
 
+            // normalize() of a zero vector is NaN, and one NaN pixel spreads through bloom and TAA. These spots are rare
+            // (a tangent parallel to the normal, a light straight behind the view), so a fixed fallback there is invisible.
+            float3 AS_SafeNorm(float3 v, float3 fallback)
+            {
+                float l2 = dot(v, v);
+                return l2 > 1e-12 ? v * rsqrt(l2) : fallback;
+            }
+
             float3 AS_ShiftTangent(float3 T, float3 N, float shift)
             {
-                return normalize(T + N * shift);
+                return AS_SafeNorm(T + N * shift, T);
             }
 
             float AS_StrandSpecular(float3 T, float3 V, float3 L, float exponent)
             {
-                float3 H = normalize(L + V);
+                float3 H = AS_SafeNorm(L + V, V);
                 float dotTH = dot(T, H);
                 float sinTH = sqrt(max(0.0001, 1.0 - dotTH * dotTH));
                 float dirAtten = smoothstep(-1.0, 0.0, dotTH);
@@ -407,9 +415,9 @@ Shader "AetherStrand/SculptedHair_URP"
                 float3 flowId  = SAMPLE_TEXTURE2D(_FlowIdMap, sampler_FlowIdMap, sampleUv).rgb;
                 float3 normalTex = SAMPLE_TEXTURE2D(_NormalMap, sampler_NormalMap, sampleUv).rgb * 2.0 - 1.0;
 
-                float3 T = normalize(input.tangentWS);
+                float3 T = AS_SafeNorm(input.tangentWS, float3(0.0, -1.0, 0.0));
                 // Unity world space is the web's mirrored through X, so a cross product flips sign.
-                float3 B = -normalize(cross(baseN, T));
+                float3 B = -AS_SafeNorm(cross(baseN, T), float3(0.0, 0.0, 0.0));
                 float3 perturbedN = normalize(baseN + B * normalTex.x * (0.32 * _GrooveDepth) + T * normalTex.y * 0.05);
                 float3 V = GetWorldSpaceNormalizeViewDir(input.positionWS);
 
@@ -479,7 +487,7 @@ Shader "AetherStrand/SculptedHair_URP"
 
                 // ---- SHEEN v2 (mirrors hairShadingModel.ts shadeHairPixel and hairShaders.ts) ----
                 float2 strandFlow = SAMPLE_TEXTURE2D(_StrandFlowMap, sampler_StrandFlowMap, sampleUv).rg * 2.0 - 1.0;
-                float3 Tb = normalize(T * max(0.05, strandFlow.y) + B * strandFlow.x * _FlowStrength);
+                float3 Tb = AS_SafeNorm(T * max(0.05, strandFlow.y) + B * strandFlow.x * _FlowStrength, T);
                 float shiftTex = ((flowId.b - 0.5) * 0.38 + (seed - 0.5) * 0.12) * _ShiftJitter;
                 float3 t1 = AS_ShiftTangent(Tb, perturbedN, _PrimaryShift + shiftTex);
                 float3 t2 = AS_ShiftTangent(Tb, perturbedN, _SecondaryShift + shiftTex * 1.2);
@@ -510,7 +518,8 @@ Shader "AetherStrand/SculptedHair_URP"
                     (AS_StrandSpecular(tS, V, LKey, _SheenPower) * keyCol * keyFacing +
                      AS_StrandSpecular(tS, V, LRim, _SheenPower) * rimCol * backFacing * 0.6);
 
-                float fresnel = pow(1.0 - max(0.0, dot(baseN, V)), _RimPower);
+                // saturate, not max: a dot of two unit vectors can come out a hair above 1, and pow of a negative base is NaN.
+                float fresnel = pow(1.0 - saturate(dot(baseN, V)), _RimPower);
                 float backGate = pow(max(0.0, dot(V, -LRim)), 1.4) * 0.45 + 0.55;
                 float tipWeight = lerp(0.22, 1.0, smoothstep(0.28, 0.94, t));
                 float3 rimTint = lerp(albedo * 1.65, rimCol, 0.30);

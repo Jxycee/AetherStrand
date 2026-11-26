@@ -200,12 +200,19 @@ const FRAGMENT_SHADER = /* glsl */ `
   varying float vGradT;
   varying float vInstability;
 
+  // normalize() of a zero vector is NaN, and one NaN pixel spreads through bloom and TAA. These spots are rare
+  // (a tangent parallel to the normal, a light straight behind the view), so a fixed fallback there is invisible.
+  vec3 safeNorm(vec3 v, vec3 fallback) {
+    float l2 = dot(v, v);
+    return l2 > 1e-12 ? v * inversesqrt(l2) : fallback;
+  }
+
   vec3 shiftTangent(vec3 T, vec3 N, float shift) {
-    return normalize(T + N * shift);
+    return safeNorm(T + N * shift, T);
   }
 
   float strandSpecular(vec3 T, vec3 V, vec3 L, float exponent) {
-    vec3 H = normalize(L + V);
+    vec3 H = safeNorm(L + V, V);
     float dotTH = dot(T, H);
     float sinTH = sqrt(max(0.0001, 1.0 - dotTH * dotTH));
     float dirAtten = smoothstep(-1.0, 0.0, dotTH);
@@ -359,8 +366,8 @@ const FRAGMENT_SHADER = /* glsl */ `
     vec3 flowId = texture2D(uFlowIdMap, sampleUv).rgb;
     vec3 normalTex = texture2D(uNormalMap, sampleUv).rgb * 2.0 - 1.0;
 
-    vec3 T = normalize(vWorldTangent);
-    vec3 B = normalize(cross(baseN, T));
+    vec3 T = safeNorm(vWorldTangent, vec3(0.0, -1.0, 0.0));
+    vec3 B = safeNorm(cross(baseN, T), vec3(0.0));
 
     // Silky micro-filament normal perturbation
     vec3 perturbedN = normalize(baseN + B * normalTex.x * (0.32 * uGrooveDepth) + T * normalTex.y * 0.05);
@@ -423,7 +430,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     // hair-coloured secondary, plus a soft wide sheen band. The highlight tangent follows the baked strand direction
     // (uStrandFlowMap rg) so it breaks along real strands; per-strand shift noise is scaled by uShiftJitter.
     vec2 strandFlow = texture2D(uStrandFlowMap, sampleUv).rg * 2.0 - 1.0;
-    vec3 Tb = normalize(T * max(0.05, strandFlow.y) + B * strandFlow.x * uFlowStrength);
+    vec3 Tb = safeNorm(T * max(0.05, strandFlow.y) + B * strandFlow.x * uFlowStrength, T);
     float shiftTex = ((flowId.b - 0.5) * 0.38 + (vStrandSeed - 0.5) * 0.12) * uShiftJitter;
     vec3 t1 = shiftTangent(Tb, perturbedN, uPrimaryShift + shiftTex);
     vec3 t2 = shiftTangent(Tb, perturbedN, uSecondaryShift + shiftTex * 1.2);
@@ -457,7 +464,8 @@ const FRAGMENT_SHADER = /* glsl */ `
       strandSpecular(tS, V, LRim, uSheenPower) * uRimColor * backFacing * 0.6);
 
     // Marschner-style Rim & Feathered Tip Ash-Translucency Separation
-    float fresnel = pow(1.0 - max(0.0, dot(baseN, V)), uRimPower);
+    // saturate, not max: a dot of two unit vectors can come out a hair above 1, and pow of a negative base is NaN.
+    float fresnel = pow(1.0 - clamp(dot(baseN, V), 0.0, 1.0), uRimPower);
     float backGate = pow(max(0.0, dot(V, -LRim)), 1.4) * 0.45 + 0.55;
     float tipWeight = mix(0.22, 1.0, smoothstep(0.28, 0.94, t));
     vec3 rimTint = mix(albedo * 1.65, uRimColor, 0.30);
