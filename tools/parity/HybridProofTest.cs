@@ -4,6 +4,13 @@
 // Put this file in an Editor folder (beside TobinFitTest.cs) and tools/parity/runtime/* in a non-Editor folder.
 // Batch:  Unity -batchmode -projectPath <game> -executeMethod HybridProofTest.Run   (no -quit: the runner exits when done)
 // Editor: Tools > AetherStrand > Parity > Hybrid Proof
+// Standalone player (phase 2c: timings without the editor's own rendering and overhead):
+//   Batch:  Unity -batchmode -projectPath <game> -executeMethod HybridProofTest.Build -quit
+//   Editor: Tools > AetherStrand > Parity > Hybrid Proof (Standalone Build)
+//   Builds the same scene as a Windows release player (not a development build: the development player adds profiler and
+//   script-debugging overhead that a shipped game does not have), then starts it unless SC_HP_LAUNCH=0. The player runs the
+//   timing matrix, flicker split and depth check, writes summary.md / summary.json to SC_HP_PLAYER_OUT, and quits.
+//   Env: SC_HP_PLAYER_OUT (default <SC_PARITY_OUT>/player), SC_HP_BUILD (exe path, default <scratch>/hybrid_proof_player/HybridProof.exe)
 // Env: SC_HP_BASE_GEO (today's export), SC_HP_HYB_GEO (export with --mass --edge-cards 24), SC_HP_RECIPE, SC_PARITY_RIG,
 //      SC_PARITY_OUT (results folder), SC_HP_FRAMES (frames per run, default 150), SC_HP_EXIT (1 = quit Unity when done)
 using System;
@@ -24,11 +31,18 @@ public static class HybridProofTest
     [MenuItem("Tools/AetherStrand/Parity/Hybrid Proof")]
     public static void Run()
     {
-        try { Setup(); }
+        try { Setup(false); }
         catch (Exception e) { Debug.LogError("HYBRIDPROOF EXCEPTION " + e); if (Application.isBatchMode) EditorApplication.Exit(1); }
     }
 
-    static void Setup()
+    [MenuItem("Tools/AetherStrand/Parity/Hybrid Proof (Standalone Build)")]
+    public static void Build()
+    {
+        try { Setup(true); }
+        catch (Exception e) { Debug.LogError("HYBRIDPROOF EXCEPTION " + e); if (Application.isBatchMode) EditorApplication.Exit(1); }
+    }
+
+    static void Setup(bool forBuild)
     {
         if (GraphicsSettings.currentRenderPipeline == null) throw new Exception("no URP asset");
         string outDir = ParityRender.Env("SC_PARITY_OUT", "<scratch>/hybrid_proof");
@@ -104,13 +118,49 @@ public static class HybridProofTest
         run.outDir = outDir;
         run.runFrames = int.Parse(ParityRender.Env("SC_HP_FRAMES", "150"));
         run.exitWhenDone = ParityRender.Env("SC_HP_EXIT", Application.isBatchMode ? "1" : "0") == "1";
+        if (forBuild)
+        {
+            run.matrixOnly = true; run.exitWhenDone = true;
+            run.outDir = ParityRender.Env("SC_HP_PLAYER_OUT", Path.Combine(outDir, "player"));
+            // the player only has the shader variants its materials use; the matrix turns alpha to coverage on at run time,
+            // so keep a copy of each hair material with it on where the build always includes it
+            if (!AssetDatabase.IsValidFolder("Assets/Parity/Resources")) AssetDatabase.CreateFolder("Assets/Parity", "Resources");
+            int k = 0;
+            foreach (var m in new[] { baseHair.material, hybHair.material })
+            {
+                var v = new Material(m); v.EnableKeyword("_ALPHA_TO_COVERAGE"); v.SetFloat("_AlphaToMask", 1f);
+                string p = "Assets/Parity/Resources/HP_a2c_variant_" + (k++) + ".mat";
+                AssetDatabase.DeleteAsset(p); AssetDatabase.CreateAsset(v, p);
+            }
+        }
         Debug.Log("HYBRIDPROOF scene: baseline " + baseGeo + ", hybrid " + hybGeo + ", paint " + (paint != null ? "yes" : "none") + ", out " + outDir);
 
         PlayerSettings.enableFrameTimingStats = true; // FrameTimingManager GPU times
         PlayerSettings.runInBackground = true;        // keep playing at full rate when the editor is not the focused window
         AssetDatabase.SaveAssets();
         EditorSceneManager.SaveScene(EditorSceneManager.GetActiveScene(), "Assets/Parity/HybridProof.unity");
-        EditorApplication.EnterPlaymode();
+        if (!forBuild) { EditorApplication.EnterPlaymode(); return; }
+
+        string exe = ParityRender.Env("SC_HP_BUILD", "<scratch>/hybrid_proof_player/HybridProof.exe");
+        PlayerSettings.fullScreenMode = FullScreenMode.Windowed; // the runner draws into its own render textures; the window size does not matter
+        PlayerSettings.defaultScreenWidth = 1280; PlayerSettings.defaultScreenHeight = 720;
+        var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+        {
+            scenes = new[] { "Assets/Parity/HybridProof.unity" },
+            locationPathName = exe,
+            target = BuildTarget.StandaloneWindows64,
+            options = BuildOptions.None,
+        });
+        var sum = report.summary;
+        Debug.Log("HYBRIDPROOF build " + sum.result + ": " + exe + ", " + sum.totalErrors + " errors, " + (sum.totalSize / (1024 * 1024)) + " MB, " + sum.totalTime.TotalSeconds.ToString("F0") + " s");
+        if (sum.result != UnityEditor.Build.Reporting.BuildResult.Succeeded) throw new Exception("player build " + sum.result);
+        if (ParityRender.Env("SC_HP_LAUNCH", "1") == "1")
+        {
+            string args = "-hpOut \"" + run.outDir + "\" -screen-fullscreen 0 -screen-width 1280 -screen-height 720 -logFile \"" + Path.Combine(run.outDir, "player.log") + "\"";
+            Directory.CreateDirectory(run.outDir);
+            System.Diagnostics.Process.Start(exe, args);
+            Debug.Log("HYBRIDPROOF player started: " + exe + " " + args + " (it quits when " + Path.Combine(run.outDir, "summary.md") + " is complete; look for HYBRIDPROOF RESULT PASS in player.log)");
+        }
     }
 
     // tiny reader so the setup can warn early when the hybrid export lacks its mass

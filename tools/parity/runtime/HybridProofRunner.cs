@@ -7,6 +7,10 @@
 //   overdraw/*.png             rasterised hair layers as a heat map
 //   sheet_<hair>.png           the four parity views at rest (1024 px, 2x2 supersampled), to set beside the web sheets
 //   cam_path.json              the camera path and head pose for every frame, so a run can be replayed elsewhere
+//   depth_<mode>.png           the hybrid at rest with and without a depth prepass (see DepthCheck), with a diff
+// It also runs in a standalone player (HybridProofTest.Build): the editor's own rendering and overhead are then out of the
+// timings, and matrixOnly skips the parity and isolation sheets (they need editor-only shaders). Player arguments:
+//   -hpOut <folder> (default: the folder the build was made with), -hpFrames <n>.
 // The hair steps once per rendered frame with a fixed 1/60 s (AetherStrandWebHair.manualStep + Tick), so every run sees the
 // same simulation whatever the real frame time.
 using System;
@@ -33,6 +37,7 @@ public class HybridProofRunner : MonoBehaviour
     public string outDir = "";
     public int warmFrames = 60, runFrames = 150, seqFrom = 45, seqTo = 105, timingRepeats = 16;
     public bool exitWhenDone = true;
+    public bool matrixOnly = false;       // player build: timings, flicker and the depth check only
 
     static readonly CultureInfo IC = CultureInfo.InvariantCulture;
     Quaternion headRestRot; Vector3 headRestPos;
@@ -45,7 +50,22 @@ public class HybridProofRunner : MonoBehaviour
     // HybridLocks / HybridMass: the hybrid with only its locks and cards, or only its inner mass (the flicker split)
     enum Hair { None, Baseline, Hybrid, HybridLocks, HybridMass }
 
-    void Start() { Application.runInBackground = true; StartCoroutine(RunAll()); } // an unfocused editor otherwise throttles play mode
+    void Start()
+    {
+        Application.runInBackground = true; // an unfocused editor (or player window) otherwise throttles
+        if (!Application.isEditor)
+        {
+            // a player must not wait on the display: the GPU time is what is measured, and vsync would hold every frame to 60 Hz
+            QualitySettings.vSyncCount = 0; Application.targetFrameRate = -1;
+            var args = Environment.GetCommandLineArgs();
+            for (int i = 0; i + 1 < args.Length; i++)
+            {
+                if (args[i] == "-hpOut") outDir = args[i + 1];
+                if (args[i] == "-hpFrames") int.TryParse(args[i + 1], out runFrames);
+            }
+        }
+        StartCoroutine(RunAll());
+    }
 
     IEnumerator RunAll()
     {
@@ -65,7 +85,7 @@ public class HybridProofRunner : MonoBehaviour
         bool ftm = FrameTimingManager.IsFeatureEnabled();
         Log("HYBRIDPROOF start: " + SystemInfo.graphicsDeviceName + " / " + SystemInfo.graphicsDeviceType + " / Unity " + Application.unityVersion
             + " / URP msaa " + msaaRest + " / FrameTimingManager " + (ftm ? "on" : "off (burst timing only)"));
-        md.AppendLine("# Hybrid proof, " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", IC));
+        md.AppendLine("# Hybrid proof, " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", IC) + (Application.isEditor ? " (editor play mode)" : " (standalone player, " + (Debug.isDebugBuild ? "development" : "release") + " build)"));
         md.AppendLine();
         md.AppendLine("GPU: " + SystemInfo.graphicsDeviceName + " (" + SystemInfo.graphicsDeviceType + "), Unity " + Application.unityVersion
             + ". Locks baseline " + LockTris(baseline) + " tris, hybrid " + LockTris(hybrid) + " tris + mass " + MassTris(hybrid) + " tris. Hybrid " + hybrid.MassSeatReport + ".");
@@ -76,16 +96,21 @@ public class HybridProofRunner : MonoBehaviour
 
         // 1) four parity views at rest, clip mode like TobinFitTest
         SetAa(ucd, urp, false, false); SetAlphaMode(false, false);
-        foreach (var hv in new[] { Hair.Baseline, Hair.Hybrid })
+        if (!matrixOnly)
         {
-            ShowHair(hv); Pose(0); SnapAll(); for (int i = 0; i < warmFrames; i++) TickVisible();
+            foreach (var hv in new[] { Hair.Baseline, Hair.Hybrid })
+            {
+                ShowHair(hv); Pose(0); SnapAll(); for (int i = 0; i < warmFrames; i++) TickVisible();
+                yield return null;
+                ParitySheet(hv);
+            }
+            // 1b) ear isolation (dev group review, Nov 25): which layer makes the tan band above the ear in Unity
+            ShowHair(Hair.Hybrid); Pose(0); SnapAll(); for (int i = 0; i < warmFrames; i++) TickVisible();
             yield return null;
-            ParitySheet(hv);
+            IsolationSheet();
         }
-        // 1b) ear isolation (dev group review, Nov 25): which layer makes the tan band above the ear in Unity
-        ShowHair(Hair.Hybrid); Pose(0); SnapAll(); for (int i = 0; i < warmFrames; i++) TickVisible();
-        yield return null;
-        IsolationSheet();
+        // 1c) depth prepass: does the hair survive a depth texture request or forced depth priming (phase 2c)
+        yield return DepthCheck(ucd, urp);
 
         // 2) the matrix
         var resList = new[] { new Res { w = 1920, h = 1080, name = "1080p" }, new Res { w = 2560, h = 1440, name = "1440p" } };
@@ -139,6 +164,8 @@ public class HybridProofRunner : MonoBehaviour
         Log("HYBRIDPROOF RESULT PASS " + Path.Combine(outDir, "summary.md"));
 #if UNITY_EDITOR
         if (exitWhenDone) { UnityEditor.EditorApplication.isPlaying = false; if (Application.isBatchMode) UnityEditor.EditorApplication.Exit(0); }
+#else
+        if (exitWhenDone) Application.Quit(0);
 #endif
     }
 
@@ -457,6 +484,93 @@ public class HybridProofRunner : MonoBehaviour
             // A2C: coverage replaces the dither. TAA: full dither, so the accumulation turns it into soft tips. Plain clip: as authored.
             m.SetFloat("_DitherStrength", a2c ? 0f : taa ? 1f : kv.Value);
         }
+    }
+
+    // ---- depth prepass (phase 2c) ----
+    // Games often ask URP for a depth texture (SSAO, soft particles, depth of field), and with MSAA on the forward renderer
+    // then draws a depth prepass with each material's DepthOnly pass; depth priming goes further and draws the colour pass
+    // with ZTest Equal against that prepass. Either way the DepthOnly pass's clip decides which hair pixels exist, so a
+    // DepthOnly clip that differs from the forward pass (or that cannot do alpha to coverage) cuts soft tips or leaves
+    // holes. This renders the hybrid at rest three ways (as the matrix runs it, with a depth texture requested, with depth
+    // priming forced on every URP renderer) and compares the hair pixels. Changed = hair pixels whose linear luminance
+    // moved by more than 0.02; holes = hair pixels that now match the no-hair frame (the hair is gone there).
+    IEnumerator DepthCheck(UniversalAdditionalCameraData ucd, UniversalRenderPipelineAsset urp)
+    {
+        var datas = new List<UniversalRendererData>();
+        try
+        {
+            var fi = typeof(UniversalRenderPipelineAsset).GetField("m_RendererDataList", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (urp != null && fi != null && fi.GetValue(urp) is ScriptableRendererData[] list)
+                foreach (var d in list) if (d is UniversalRendererData u) datas.Add(u);
+        }
+        catch (Exception e) { Log("HYBRIDPROOF depth check: renderer list not readable (" + e.Message + "); priming run skipped"); }
+        var primRest = new List<DepthPrimingMode>(); foreach (var d in datas) primRest.Add(d.depthPrimingMode);
+        bool depthRest = ucd.requiresDepthTexture;
+        md.AppendLine("## Depth prepass");
+        md.AppendLine();
+        md.AppendLine("Hybrid at rest, 1080p close. Changed = hair pixels whose linear luminance moved over 0.02 against the matrix render; holes = hair pixels that now show what is behind the hair. Priming restored to " + (primRest.Count > 0 ? primRest[0].ToString() : "n/a") + " afterwards.");
+        md.AppendLine();
+        md.AppendLine("| alpha | variant | hair px | changed % | holes % | mean abs diff (linear lum) |");
+        md.AppendLine("|---|---|---|---|---|---|");
+        const int W = 1920, H = 1080; const float dk = 1.2f;
+        foreach (var mode in new[] { "a2c", "clip" })
+        {
+            bool a2c = mode == "a2c";
+            SetAa(ucd, urp, a2c, false); SetAlphaMode(a2c, false);
+            var rt = new RenderTexture(W, H, 24, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear) { antiAliasing = a2c ? a2cSamples : 1 };
+            rt.Create(); cam.targetTexture = rt; cam.aspect = (float)W / H;
+            yield return Restart(Hair.Hybrid, dk);
+            ShowHair(Hair.None); var none = Grab(rt);
+            ShowHair(Hair.Hybrid); var refPx = Grab(rt);
+            var variants = new List<KeyValuePair<string, ushort[]>>();
+            ucd.requiresDepthTexture = true; yield return null;
+            variants.Add(new KeyValuePair<string, ushort[]>("depth texture", Grab(rt)));
+            ucd.requiresDepthTexture = depthRest;
+            if (datas.Count > 0)
+            {
+                foreach (var d in datas) d.depthPrimingMode = DepthPrimingMode.Forced;
+                yield return null;
+                variants.Add(new KeyValuePair<string, ushort[]>("priming forced", Grab(rt)));
+                for (int i = 0; i < datas.Count; i++) datas[i].depthPrimingMode = primRest[i];
+                yield return null;
+            }
+            md.AppendLine("| " + (a2c ? "MSAA " + a2cSamples + "x + A2C" : "clip") + " | matrix render | " + HairPx(refPx, none) + " | 0 | 0 | 0 |");
+            var strip = new Texture2D(W * (1 + variants.Count), H, TextureFormat.RGBAHalf, false, true);
+            Blit(strip, refPx, 0, W, H, 1f);
+            for (int v = 0; v < variants.Count; v++)
+            {
+                var x = variants[v].Value; long hair = 0, changed = 0, holes = 0; double sum = 0;
+                var diff = new Color32[W * H];
+                for (int i = 0; i < W * H; i++)
+                {
+                    float lr = Lum(refPx, i), ln = Lum(none, i), lx = Lum(x, i);
+                    float d = Mathf.Abs(lx - lr);
+                    byte g8 = (byte)Mathf.RoundToInt(Mathf.Min(1f, d * 8f) * 255f); diff[i] = new Color32(g8, g8, g8, 255);
+                    if (Mathf.Abs(lr - ln) < 0.01f) continue; // not a hair pixel
+                    hair++; sum += d;
+                    if (d > 0.02f) changed++;
+                    if (Mathf.Abs(lx - ln) < 0.01f) holes++;
+                }
+                md.AppendLine("| " + (a2c ? "MSAA " + a2cSamples + "x + A2C" : "clip") + " | " + variants[v].Key + " | " + hair + " | " + F(100.0 * changed / Math.Max(1, hair), 2) + " | " + F(100.0 * holes / Math.Max(1, hair), 2) + " | " + F(sum / Math.Max(1, hair), 4) + " |");
+                json.Add("{\"run\":\"depth_" + mode + "_" + variants[v].Key.Replace(' ', '_') + "\",\"hairPx\":" + hair + ",\"changedPct\":" + J(100.0 * changed / Math.Max(1, hair)) + ",\"holesPct\":" + J(100.0 * holes / Math.Max(1, hair)) + ",\"meanAbsDiff\":" + J(sum / Math.Max(1, hair)) + "}");
+                Blit(strip, x, W * (v + 1), W, H, 1f);
+                if (v == variants.Count - 1) { var dt = new Texture2D(W, H, TextureFormat.RGB24, false); dt.SetPixels32(diff); dt.Apply(false); File.WriteAllBytes(Path.Combine(outDir, "depth_" + mode + "_diff_x8.png"), dt.EncodeToPNG()); Destroy(dt); }
+            }
+            strip.Apply(false);
+            var tm = ToneMap(strip, 2); File.WriteAllBytes(Path.Combine(outDir, "depth_" + mode + ".png"), tm.EncodeToPNG()); Destroy(tm); Destroy(strip);
+            cam.targetTexture = null; rt.Release(); Destroy(rt);
+            Flush();
+        }
+        md.AppendLine();
+        md.AppendLine("Images: depth_<alpha>.png = matrix render | depth texture | priming forced (tone mapped); depth_<alpha>_diff_x8.png = |last variant - matrix| x 8. Where priming made no difference at all, URP may have turned it off for this camera (it does with some MSAA set-ups), which this check cannot see.");
+        md.AppendLine();
+    }
+    static float Lum(ushort[] p, int i) => 0.2126f * Mathf.HalfToFloat(p[i * 4]) + 0.7152f * Mathf.HalfToFloat(p[i * 4 + 1]) + 0.0722f * Mathf.HalfToFloat(p[i * 4 + 2]);
+    static long HairPx(ushort[] a, ushort[] none) { long n = 0; for (int i = 0; i < a.Length / 4; i++) if (Mathf.Abs(Lum(a, i) - Lum(none, i)) >= 0.01f) n++; return n; }
+    static void Blit(Texture2D dst, ushort[] src, int x0, int w, int h, float k)
+    {
+        var d = dst.GetPixelData<ushort>(0); int DW = dst.width;
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) for (int c = 0; c < 4; c++) d[((y * DW) + x0 + x) * 4 + c] = src[(y * w + x) * 4 + c];
     }
 
     // ---- helpers ----
